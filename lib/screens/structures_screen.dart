@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/structure_service.dart';
+import '../services/database/database_helper.dart';
 import '../utils/constants.dart';
 import 'categories_screen.dart';
-import 'mon_espace_screen.dart'; // 🔹 Ton écran perso
+import 'mon_espace_screen.dart';
+import 'home_screen.dart';
 
 class StructuresScreen extends StatefulWidget {
   const StructuresScreen({super.key});
@@ -13,56 +16,124 @@ class StructuresScreen extends StatefulWidget {
 
 class _StructuresScreenState extends State<StructuresScreen> {
   final StructureService _structureService = StructureService();
-  final TextEditingController searchController = TextEditingController();
+  final DatabaseHelper _dbHelper = DatabaseHelper();
 
   List<dynamic> allStructures = [];
-  List<dynamic> filteredStructures = [];
   bool isLoading = true;
-
-  String flashMessage =
-      "📢 Bienvenue ! Consultez les dernières structures disponibles.";
+  String? userProfile;
 
   @override
   void initState() {
     super.initState();
-    fetchStructures();
-    searchController.addListener(_onSearchChanged);
+    _initData();
   }
 
-  @override
-  void dispose() {
-    searchController.removeListener(_onSearchChanged);
-    searchController.dispose();
-    super.dispose();
+  Future<void> _initData() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() => userProfile = prefs.getString('userProfile'));
+    }
+    await fetchStructures();
   }
 
-  void _onSearchChanged() {
-    final query = searchController.text.toLowerCase();
-    setState(() {
-      filteredStructures = allStructures.where((structure) {
-        final nom = (structure['nomStructure'] ?? '').toString().toLowerCase();
-        final ville = (structure['villeStructure'] ?? '').toString().toLowerCase();
-        return nom.contains(query) || ville.contains(query);
-      }).toList();
-    });
-  }
-
+  /// Récupère les structures avec bascule automatique et filtrage par User
   Future<void> fetchStructures() async {
+    if (!mounted) return;
+    setState(() => isLoading = true);
+
+    List<dynamic> rawData = [];
+
     try {
-      final data = await _structureService.getAllStructures();
-      setState(() {
-        allStructures = data;
-        filteredStructures = data;
-        isLoading = false;
-        flashMessage = "✅ ${data.length} structures disponibles actuellement.";
-      });
+      final prefs = await SharedPreferences.getInstance();
+      final String? profile = prefs.getString('userProfile');
+      final String? userId = prefs.getString('userId');
+      final String? codeStructure = prefs.getString('codeStructure');
+
+      if (userId == null) {
+        if (mounted) setState(() => isLoading = false);
+        return;
+      }
+
+      // 1. TENTATIVE VIA API (BACKEND)
+      try {
+        if (profile == "Administrateur" && (codeStructure ?? '').isEmpty) {
+          rawData = await _structureService.getStructuresByUser(userId);
+        } else if (codeStructure != null && codeStructure.isNotEmpty) {
+          rawData = await _structureService.getStructuresByCode(codeStructure);
+        }
+
+        // Si l'API répond, on synchronise.
+        // Note: Votre syncStructuresLocal doit maintenant gérer le champ createdUserId
+        if (rawData.isNotEmpty) {
+          await _dbHelper.syncStructuresLocal(rawData);
+        }
+      } catch (apiError) {
+        debugPrint("🌐 Backend injoignable, passage au mode local pour l'user $userId");
+      }
+
+      // 2. BASCULE (FALLBACK) : Recherche filtrée par USER ID dans SQLite
+      if (rawData.isEmpty) {
+        // Utilisation de la méthode filtrée pour ne pas avoir 0 si l'user est lié
+        rawData = await _dbHelper.getLocalStructuresByUser(userId);
+        debugPrint("📂 SQLite : ${rawData.length} structures trouvées pour l'utilisateur.");
+      }
+
+      // 3. LOGIQUE DE FILTRAGE (Status & Abonnement)
+      final now = DateTime.now();
+      final List<dynamic> filteredData = rawData.where((s) {
+        // État actif
+        final dynamic activeField = s['isActive'] ?? s['active'];
+        final bool isActive = (activeField == true ||
+            activeField.toString().toLowerCase() == 'true' ||
+            activeField == 1);
+
+        // Date de fin d'abonnement
+        final String? endSubStr = s['endSub']?.toString();
+
+        if (endSubStr == null || endSubStr.isEmpty) {
+          return isActive; // En local, si l'info manque, on laisse passer
+        }
+
+        try {
+          final DateTime endSub = DateTime.parse(endSubStr);
+          return isActive && endSub.isAfter(now);
+        } catch (e) {
+          return isActive;
+        }
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          allStructures = filteredData;
+          isLoading = false;
+        });
+      }
     } catch (e) {
-      setState(() {
-        isLoading = false;
-        flashMessage = "⚠️ Impossible de charger les structures.";
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Erreur : $e")),
+      debugPrint("❌ Erreur critique StructuresScreen : $e");
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  // --- Reste du code (UI et Navigation) identique à votre version ---
+
+  Future<void> _saveAndNavigate(dynamic structure) async {
+    final prefs = await SharedPreferences.getInstance();
+    // Support idStructure (Backend) ou id (SQLite)
+    final idStr = (structure['idStructure'] ?? structure['id']).toString();
+    debugPrint("❌ ID STRUCTURE : " + idStr);
+    await prefs.setString('selected_structure_id', idStr);
+    await prefs.setString('selected_structure_name', structure['nomStructure'] ?? 'Inconnu');
+    await prefs.setString('codeStructure', structure['codeStructure'] ?? '');
+
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => CategoriesScreen(
+            structureId: idStr,
+            structureName: structure['nomStructure'] ?? 'Inconnu',
+          ),
+        ),
       );
     }
   }
@@ -70,241 +141,148 @@ class _StructuresScreenState extends State<StructuresScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.orange[50],
+      backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
-        title: const Text("Structures", style: TextStyle(color: Colors.white)),
-        backgroundColor: const Color(0xFFFF9800),
-        elevation: 4,
-        iconTheme: const IconThemeData(color: Colors.white),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        title: const Text("Vos Structures",
+            style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
+        iconTheme: const IconThemeData(color: Colors.black87),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.home_rounded, color: Color(0xFFFF9800)),
+            onPressed: () => Navigator.pushAndRemoveUntil(
+                context, MaterialPageRoute(builder: (_) => const HomeScreen()), (r) => false),
+          ),
+        ],
       ),
       body: Column(
         children: [
-          // 🔔 Zone Flash Info
-          Container(
-            width: double.infinity,
-            color: Colors.orange[200],
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-            child: Row(
-              children: [
-                const Icon(Icons.campaign, color: Colors.white, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    flashMessage,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // 📰 Zone publicité agrandie
-          Container(
-            width: double.infinity,
-            height: 150,
-            margin: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              color: Colors.orange[100],
-              image: const DecorationImage(
-                image: AssetImage('assets/images/pub_banner.png'),
-                fit: BoxFit.cover,
-              ),
-            ),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.3),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              alignment: Alignment.center,
-              child: const Text(
-                "🧾 Publicité : Réservez votre espace ici !",
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16),
-              ),
-            ),
-          ),
-
-          // 🔍 Barre de recherche
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: TextField(
-              controller: searchController,
-              decoration: InputDecoration(
-                hintText: "Rechercher une structure...",
-                prefixIcon:
-                const Icon(Icons.search, color: Colors.orange, size: 20),
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding:
-                const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
-          ),
-
-          // 🧱 Grille des structures
+          _buildHeader(),
           Expanded(
             child: isLoading
-                ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFFFF9800)))
-                : filteredStructures.isEmpty
-                ? const Center(
-              child: Text(
-                "Aucune structure trouvée 😕",
-                style: TextStyle(fontSize: 16, color: Colors.grey),
+                ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF9800)))
+                : allStructures.isEmpty
+                ? _buildEmptyState()
+                : RefreshIndicator(
+              onRefresh: fetchStructures,
+              color: const Color(0xFFFF9800),
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                itemCount: allStructures.length,
+                separatorBuilder: (c, i) => const SizedBox(height: 16),
+                itemBuilder: (context, index) => _buildStructureCard(allStructures[index]),
               ),
-            )
-                : GridView.builder(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 4),
-              gridDelegate:
-              const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                crossAxisSpacing: 8,
-                mainAxisSpacing: 8,
-                childAspectRatio: 0.62,
-              ),
-              itemCount: filteredStructures.length,
-              itemBuilder: (context, index) {
-                final s = filteredStructures[index];
-                final photoUrl = (s['structPhotoUrl'] ?? '')
-                    .replaceAll('http://localhost:8080', baseUrl);
-
-                return GestureDetector(
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => CategoriesScreen(
-                          structureId: s['idStructure'],
-                          structureName: s['nomStructure'],
-                        ),
-                      ),
-                    );
-                  },
-                  child: Card(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    elevation: 2,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        ClipRRect(
-                          borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(12),
-                          ),
-                          child: photoUrl.isNotEmpty
-                              ? Image.network(
-                            photoUrl,
-                            height: 70,
-                            width: double.infinity,
-                            fit: BoxFit.cover,
-                          )
-                              : Container(
-                            height: 70,
-                            width: double.infinity,
-                            color: Colors.orange[100],
-                            child: const Icon(
-                              Icons.business,
-                              size: 26,
-                              color: Color(0xFFFF9800),
-                            ),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Column(
-                            crossAxisAlignment:
-                            CrossAxisAlignment.start,
-                            children: [
-                          Text(
-                          s['nomStructure'] ??
-                            'Structure sans nom',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 11,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            s['villeStructure'] ?? 'Ville inconnue',
-                            style: TextStyle(
-                              color: Colors.grey[700],
-                              fontSize: 10,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Row(
-                            children: [
-                            Icon(
-                            Icons.circle,
-                            size: 7,
-                            color: (s['disponibiliteStructure']
-                                ?.toString()
-                                .toLowerCase() ==
-                                'disponible')
-                                ? Colors.green
-                                : Colors.red,
-                          ),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              s['disponibiliteStructure'] ??
-                                  'Inconnu',
-                              style: TextStyle(
-                                  color: (s['disponibiliteStructure']
-                                      ?.toString()
-                                      .toLowerCase() ==
-                                      'disponible')
-                                  ? Colors.green
-                                  : Colors.red,
-                              fontSize: 10,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                    ],
-                  ),
-                ),
-                ],
-                ),
-                ),
-                );
-              },
             ),
           ),
         ],
       ),
-      // 🔹 Bouton flottant "Mon espace perso"
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          // Navigation vers ton espace perso
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const MonEspaceScreen()),
-          );
-        },
-        icon: const Icon(Icons.person),
-        label: const Text("Mon espace perso"),
+      floatingActionButton: userProfile == "Administrateur"
+          ? FloatingActionButton.extended(
+        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MonEspaceScreen())),
+        label: const Text("Admin", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        icon: const Icon(Icons.admin_panel_settings, color: Colors.white),
         backgroundColor: const Color(0xFFFF9800),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      )
+          : null,
     );
   }
+
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("Bonjour,", style: TextStyle(color: Colors.grey, fontSize: 16)),
+              Text("Gérez vos espaces", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          CircleAvatar(
+            backgroundColor: const Color(0xFFFF9800).withOpacity(0.1),
+            child: const Icon(Icons.business_center, color: Color(0xFFFF9800)),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.cloud_off, size: 60, color: Colors.grey[300]),
+          const SizedBox(height: 10),
+          const Text("Aucune structure disponible.", style: TextStyle(color: Colors.grey)),
+          TextButton(
+              onPressed: fetchStructures,
+              child: const Text("Réessayer", style: TextStyle(color: Color(0xFFFF9800)))
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStructureCard(dynamic s) {
+    String photoUrl = s['photoPath'] ?? s['structPhotoUrl'] ?? '';
+    if (photoUrl.contains('localhost')) photoUrl = photoUrl.replaceAll('http://localhost:8080', baseUrl);
+
+    return InkWell(
+      onTap: () => _saveAndNavigate(s),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
+        ),
+        child: Column(
+          children: [
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: photoUrl.isNotEmpty && photoUrl.startsWith('http')
+                    ? Image.network(photoUrl, fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _defaultImage())
+                    : _defaultImage(),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(s['nomStructure'] ?? 'Structure',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Icon(Icons.location_on_outlined, size: 14, color: Colors.grey),
+                            const SizedBox(width: 4),
+                            Text(s['villeStructure'] ?? 'Ville non précisée',
+                                style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.arrow_forward_ios, size: 16, color: Color(0xFFFF9800))
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _defaultImage() => Container(color: Colors.grey[100], child: const Icon(Icons.business, color: Colors.grey, size: 40));
 }

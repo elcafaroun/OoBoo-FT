@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/product_service.dart';
+import '../providers/cart_provider.dart';
+import 'product_detail_screen.dart';
+import '../utils/constants.dart';
 
 class ProductsScreen extends StatefulWidget {
   final String categoryId;
@@ -50,8 +54,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
   Future<void> fetchProducts() async {
     try {
-      final data =
-      await _productService.getProductsByCategory(widget.categoryId);
+      final data = await _productService.getProductsByCategory(widget.categoryId);
       setState(() {
         products = data;
         filteredProducts = data;
@@ -59,40 +62,79 @@ class _ProductsScreenState extends State<ProductsScreen> {
       });
     } catch (e) {
       setState(() => isLoading = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Erreur : $e")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Erreur : $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.orange[50],
+      backgroundColor: const Color(0xFFF9F7F2), // Fond crème propre
       appBar: AppBar(
-        title: Text(
-          widget.categoryName,
-          style: const TextStyle(color: Colors.white),
+        title: Text(widget.categoryName,
+            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+        centerTitle: true,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1.0),
+          child: Container(color: Colors.grey.withOpacity(0.2), height: 1.0),
         ),
-        backgroundColor: const Color(0xFFFF9800),
-        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          // 🛒 Icône Panier avec badge
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.shopping_cart_outlined, size: 26),
+                onPressed: () => Navigator.pushNamed(context, '/cart'),
+              ),
+              Positioned(
+                right: 8,
+                top: 8,
+                child: Consumer<CartProvider>(
+                  builder: (context, cart, child) {
+                    return cart.itemCount > 0
+                        ? Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF9800),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text('${cart.itemCount}',
+                          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center),
+                    )
+                        : const SizedBox.shrink();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: Column(
         children: [
-          // 🔍 Barre de recherche
+          // 🔍 Barre de recherche épurée
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(16),
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                hintText: "Rechercher un produit...",
-                prefixIcon: const Icon(Icons.search,
-                    color: Color(0xFFFF9800), size: 22),
+                hintText: "Rechercher...",
+                prefixIcon: const Icon(Icons.search, color: Colors.grey),
                 filled: true,
                 fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide(color: Colors.grey.shade200)),
               ),
             ),
           ),
@@ -100,116 +142,63 @@ class _ProductsScreenState extends State<ProductsScreen> {
           // 🧾 Grille des produits
           Expanded(
             child: isLoading
-                ? const Center(
-                child: CircularProgressIndicator(color: Color(0xFFFF9800)))
+                ? const Center(child: CircularProgressIndicator(color: Color(0xFFFF9800)))
                 : filteredProducts.isEmpty
-                ? const Center(
-              child: Text(
-                "Aucun produit trouvé 😕",
-                style: TextStyle(fontSize: 16, color: Colors.grey),
-              ),
-            )
+                ? const Center(child: Text("Aucun produit trouvé"))
                 : GridView.builder(
-              padding: const EdgeInsets.all(10),
-              gridDelegate:
-              const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2, // 🟠 2 colonnes
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 10,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
                 childAspectRatio: 0.75,
               ),
               itemCount: filteredProducts.length,
               itemBuilder: (context, index) {
-                final p = filteredProducts[index] ?? {};
+                final p = filteredProducts[index];
+                final nom = p['productName'] ?? 'Produit';
+                final prix = p['productPrice'] ?? 0;
 
-                final imageUrl = (p['photoProduitUrl'] ?? '')
-                    .toString()
-                    .replaceAll('http://localhost:8080', 'http://127.0.0.1:8080');
+                // Gestion image avec placeholder
+                String imageUrl = (p['productPhotoUrl'] ?? '').toString();
 
-                final nom = (p['productName'] ?? 'Produit inconnu')
-                    .toString();
-                final desc = (p['descriptionProduit'] ?? '')
-                    .toString();
-                final prix = (p['productPrice'] ?? 'N/A').toString();
-
-                return Card(
-                  elevation: 3,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      // 🖼️ Image produit
-                      ClipRRect(
-                        borderRadius: const BorderRadius.vertical(
-                          top: Radius.circular(12),
-                        ),
-                        child: imageUrl.isNotEmpty
-                            ? Image.network(
-                          imageUrl,
-                          height: 100,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                          errorBuilder:
-                              (context, error, stackTrace) {
-                            return Container(
-                              height: 100,
-                              color: Colors.orange[100],
-                              child: const Icon(
-                                Icons.broken_image,
-                                color: Color(0xFFFF9800),
-                                size: 40,
-                              ),
-                            );
-                          },
-                        )
-                            : Container(
-                          height: 100,
-                          color: Colors.orange[100],
-                          child: const Icon(
-                            Icons.image,
-                            color: Color(0xFFFF9800),
-                            size: 40,
+                return GestureDetector(
+                  onTap: () => Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => ProductDetailScreen(product: p))),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.grey.shade100),
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: ClipRRect(
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                            child: imageUrl.isNotEmpty
+                                ? Image.network(imageUrl, width: double.infinity, fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => _buildPlaceholder())
+                                : _buildPlaceholder(),
                           ),
                         ),
-                      ),
-
-                      // 🧾 Détails produit
-                      Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Column(
-                          children: [
-                            Text(
-                              nom,
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 13),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              desc,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.grey[700]),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              "$prix FCFA",
-                              style: const TextStyle(
-                                  color: Color(0xFFFF9800),
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ],
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(nom, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                              const SizedBox(height: 4),
+                              Text("$prix FCFA",
+                                  style: const TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.w900)),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 );
               },
@@ -217,6 +206,14 @@ class _ProductsScreenState extends State<ProductsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildPlaceholder() {
+    return Container(
+      color: Colors.grey.shade50,
+      width: double.infinity,
+      child: const Icon(Icons.image_outlined, color: Colors.grey, size: 40),
     );
   }
 }

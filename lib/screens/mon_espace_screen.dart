@@ -1,8 +1,9 @@
-import 'package:fada/screens/subscription_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/structure_service.dart';
-import '../utils/constants.dart';
+import '../models/subscription_plan.dart';
+import 'structure_categories_screen.dart';
+import 'subscription_screen.dart';
 
 class MonEspaceScreen extends StatefulWidget {
   const MonEspaceScreen({super.key});
@@ -12,162 +13,256 @@ class MonEspaceScreen extends StatefulWidget {
 }
 
 class _MonEspaceScreenState extends State<MonEspaceScreen> {
-  String? userId;
-  bool isLoading = true;
-
   final StructureService _structureService = StructureService();
+  bool isLoading = true;
   List<dynamic> userStructures = [];
-  bool structuresLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadUserData();
+    _loadStructures();
   }
 
-  Future<void> _loadUserData() async {
+  Future<void> _loadStructures() async {
+    if (!mounted) return;
+    setState(() => isLoading = true);
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      userId = prefs.getString('userId');
-      isLoading = false;
-    });
+    final String? userId = prefs.getString('userId');
+    final String? codeStructure = prefs.getString('codeStructure');
+
     if (userId != null) {
-      _fetchUserStructures(userId!);
+      if ((codeStructure ?? '').isEmpty) {
+        final result = await _structureService.getStructuresByUser(userId);
+        if (mounted)
+          setState(() {
+            userStructures = result;
+            isLoading = false;
+          });
+      } else {
+        if ((codeStructure ?? '').isNotEmpty) {
+          final result = await _structureService.getStructuresByCode(codeStructure!);
+          if (mounted)
+            setState(() {
+              userStructures = result;
+              isLoading = false;
+            });
+        }
+      }
+    } else {
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
-  Future<void> _fetchUserStructures(String userId) async {
-    setState(() => structuresLoading = true);
+  Future<void> _handleSubscriptionAction(dynamic s, bool isExpired) async {
+    final String structureId =
+        (s['id'] ?? s['structureId'] ?? s['idStructure']).toString();
+    final int currentPriorite =
+        int.tryParse(s['priorite']?.toString() ?? '0') ?? 0;
+
+    final SubscriptionPlan? selectedPlan = await Navigator.push(
+      context,
+      MaterialPageRoute(
+          builder: (_) => SubscriptionScreen(filterPriorite: currentPriorite)),
+    );
+
+    if (selectedPlan != null) {
+      setState(() => isLoading = true);
+      try {
+        await _structureService.updateStructurePlan(
+            structureId, selectedPlan.name);
+        _loadStructures();
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("✅ Mise à jour effectuée !")));
+      } catch (e) {
+        if (mounted)
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text("Erreur : $e")));
+      } finally {
+        if (mounted) setState(() => isLoading = false);
+      }
+    }
+  }
+
+  bool _isExpired(dynamic s) {
+    if (s['cout'] != null && (s['cout'] == 0.0 || s['cout'] == 0)) return false;
+    if (s['endSub'] == null) return true;
     try {
-      final allStructures = await _structureService.getAllStructures();
-      setState(() {
-        // Filtrer les structures créées par l'utilisateur connecté
-        userStructures = allStructures
-            .where((s) => s['createdUserId']?.toString() == userId)
-            .toList();
-        structuresLoading = false;
-      });
+      DateTime endDate = DateTime.parse(s['endSub'].toString());
+      return DateTime.now().isAfter(endDate);
     } catch (e) {
-      setState(() => structuresLoading = false);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text("Erreur : $e")));
+      return true;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 2, // 2 onglets
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text("Mon espace perso"),
-          backgroundColor: const Color(0xFFFF9800),
-          bottom: const TabBar(
-            indicatorColor: Colors.white,
-            tabs: [
-              Tab(text: "Mes bons plans", icon: Icon(Icons.card_giftcard)),
-              Tab(text: "Mes structures", icon: Icon(Icons.business)),
-            ],
-          ),
-        ),
-        body: isLoading
-            ? const Center(
-          child: CircularProgressIndicator(color: Color(0xFFFF9800)),
-        )
-            : TabBarView(
-          children: [
-            // 🔹 Onglet Mes bons plans
-            _bonsPlansTab(),
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F4F4),
+      appBar: AppBar(
+        title: const Text("ADMINISTRATION",
+            style: TextStyle(fontWeight: FontWeight.w900)),
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: const Color(0xFFFF9800),
+        onPressed: () async {
+          await Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const SubscriptionScreen()));
+          _loadStructures();
+        },
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
+      body: isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFFFF9800)))
+          : Column(
+              children: [
+                _buildHeaderStats(),
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: userStructures.length,
+                    itemBuilder: (context, index) =>
+                        _buildProCard(userStructures[index]),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
 
-            // 🔹 Onglet Mes structures
-            _mesStructuresTab(),
-          ],
-        ),
-
-        // ✅ Bouton flottant ajouté ici
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const SubscriptionScreen(),
-              ),
-            );
-          },
-          backgroundColor: const Color(0xFFFF9800),
-          icon: const Icon(Icons.add_business),
-          label: const Text("Créer mon business"),
-        ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+  Widget _buildHeaderStats() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFF9800),
+          borderRadius: BorderRadius.circular(20)),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text("TOTAL STRUCTURES",
+              style:
+                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          Text("${userStructures.length}",
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 32,
+                  fontWeight: FontWeight.w900)),
+        ],
       ),
     );
   }
 
-  // ===============================
-  // 🟠 Onglet Mes bons plans
-  // ===============================
-  Widget _bonsPlansTab() {
-    final List<String> bonsPlans = [
-      "Promotion 1 : 10% sur le plan PRO",
-      "Promotion 2 : 15% sur la formule PREMIUM",
-      "Offre spéciale : Création gratuite de la 3e structure",
-    ];
+  Widget _buildProCard(dynamic s) {
+    final id = (s['id'] ?? s['structureId'] ?? s['idStructure']).toString();
+    final name = s['nomStructure'] ?? 'Structure';
+    final bool expired = _isExpired(s);
+    final bool isFree =
+        s['cout'] != null && (s['cout'] == 0.0 || s['cout'] == 0);
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: bonsPlans.length,
-      itemBuilder: (context, index) {
-        return Card(
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
-          elevation: 2,
-          margin: const EdgeInsets.only(bottom: 12),
-          child: ListTile(
-            leading: const Icon(Icons.local_offer, color: Color(0xFFFF9800)),
-            title: Text(bonsPlans[index]),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 15),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: isFree
+                ? Colors.green
+                : (expired ? Colors.red.shade200 : Colors.blue.shade200)),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2))
+        ],
+      ),
+      child: Column(
+        children: [
+          // InkWell encapsule uniquement le haut pour la navigation
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
+              onTap: () async {
+                // <--- Ajout de async ici
+                // 1. Extraire les variables nécessaires depuis l'objet 's'
+                final SharedPreferences prefs =
+                    await SharedPreferences.getInstance();
+                final String id =
+                    (s['id'] ?? s['structureId'] ?? s['idStructure'])
+                        .toString();
+                final String name = s['nomStructure'] ?? 'Structure';
+                await prefs.setString('selected_structure_id', id);
+
+                // 2. Vérification de sécurité (bonne pratique Flutter)
+                if (!context.mounted) return;
+
+                // 3. Passer les variables séparément
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => StructureCategoriesScreen(
+                      structureId: id,
+                      structureName: name,
+                    ),
+                  ),
+                );
+              },
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: isFree
+                      ? Colors.green.shade50
+                      : (expired ? Colors.red.shade50 : Colors.blue.shade50),
+                  child: Icon(isFree ? Icons.star : Icons.business,
+                      color: isFree
+                          ? Colors.green
+                          : (expired ? Colors.red : Colors.blue)),
+                ),
+                title: Text(name.toUpperCase(),
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text(expired ? "EXPIRÉ" : "ACTIF",
+                    style: TextStyle(
+                        color: expired ? Colors.red : Colors.green,
+                        fontWeight: FontWeight.w600)),
+                trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+              ),
+            ),
           ),
-        );
-      },
-    );
-  }
-
-  // ===============================
-  // 🟠 Onglet Mes structures
-  // ===============================
-  Widget _mesStructuresTab() {
-    if (structuresLoading) {
-      return const Center(
-          child: CircularProgressIndicator(color: Color(0xFFFF9800)));
-    }
-
-    if (userStructures.isEmpty) {
-      return const Center(
-        child: Text("Vous n'avez créé aucune structure."),
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: userStructures.length,
-      itemBuilder: (context, index) {
-        final s = userStructures[index];
-        final photoUrl = (s['structPhotoUrl'] ?? '').replaceAll(
-            'http://localhost:8080', baseUrl);
-
-        return Card(
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
-          elevation: 2,
-          margin: const EdgeInsets.only(bottom: 12),
-          child: ListTile(
-            leading: photoUrl.isNotEmpty
-                ? Image.network(photoUrl, width: 50, height: 50, fit: BoxFit.cover)
-                : const Icon(Icons.business, color: Color(0xFFFF9800)),
-            title: Text(s['nomStructure'] ?? 'Structure sans nom'),
-            subtitle: Text(s['villeStructure'] ?? 'Ville inconnue'),
-          ),
-        );
-      },
+          const Divider(height: 1),
+          // Boutons du bas inchangés
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Row(
+              children: [
+                TextButton.icon(
+                  onPressed: () => _handleSubscriptionAction(s, expired),
+                  icon: const Icon(Icons.autorenew, size: 16),
+                  label: const Text("GÉRER"),
+                ),
+                TextButton.icon(
+                  onPressed: () {/* Action edit */},
+                  icon: const Icon(Icons.edit, size: 16),
+                  label: const Text("EDIT"),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () => _structureService
+                      .deleteStructure(id)
+                      .then((_) => _loadStructures()),
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.red, size: 20),
+                )
+              ],
+            ),
+          )
+        ],
+      ),
     );
   }
 }

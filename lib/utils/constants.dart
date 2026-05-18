@@ -1,1 +1,3 @@
-const String baseUrl = "http://10.38.83.100:8080"; // IP de 10.38.83.100 ton backend
+const String baseUrl = "http://192.168.1.64:8080";
+
+// IP de 10.38.83.100 ton backend10.100.0.207 10.58.109.207. 192.168.11.16310.139.68.207  172.23.107.207

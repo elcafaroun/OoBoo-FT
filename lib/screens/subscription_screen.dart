@@ -1,158 +1,151 @@
 import 'package:flutter/material.dart';
+import '../services/subscription_service.dart';
+import '../models/subscription_plan.dart';
+import 'add_structure_screen.dart';
 
-class SubscriptionScreen extends StatelessWidget {
-  const SubscriptionScreen({super.key});
+class SubscriptionScreen extends StatefulWidget {
+  final int? filterPriorite;
+
+  const SubscriptionScreen({super.key, this.filterPriorite});
+
+  @override
+  State<SubscriptionScreen> createState() => _SubscriptionScreenState();
+}
+
+class _SubscriptionScreenState extends State<SubscriptionScreen> {
+  final SubscriptionService _subService = SubscriptionService();
+  late Future<List<SubscriptionPlan>> _plansFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _plansFuture = _subService.getAllPlans();
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Liste des plans avec icône
-    final plans = [
-      {
-        "name": "BASE",
-        "price": "Gratuit",
-        "color": Colors.orange,
-        "icon": Icons.star_border, // icône pour le plan
-        "features": [
-          "Inscription de 1 business",
-          "Accès aux bons plans",
-          "Support par email"
-        ]
-      },
-      {
-        "name": "PRO",
-        "price": "10 000 FCFA / mois",
-        "color": Colors.deepOrange,
-        "icon": Icons.star_half,
-        "features": [
-          "Inscription de 5 business",
-          "Accès aux bons plans avancés",
-          "Statistiques détaillées",
-          "Support prioritaire"
-        ]
-      },
-      {
-        "name": "PREMIUM",
-        "price": "25 000 FCFA / mois",
-        "color": Colors.redAccent,
-        "icon": Icons.star,
-        "features": [
-          "Inscription illimitée",
-          "Accès complet à tous les bons plans",
-          "Statistiques avancées",
-          "Support VIP",
-          "Mises en avant premium"
-        ]
-      },
-    ];
-
     return Scaffold(
+      backgroundColor: const Color(0xFFF4F4F4),
       appBar: AppBar(
-        title: const Text("Choisir un plan"),
-        backgroundColor: const Color(0xFFFF9800),
+        title: const Text("CHOISIR UN PLAN", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
         centerTitle: true,
+        leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            const Text(
-              "Sélectionnez le plan qui vous convient",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 20),
+      body: FutureBuilder<List<SubscriptionPlan>>(
+        future: _plansFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: Color(0xFFFF9800)));
+          }
+          if (snapshot.hasError) return Center(child: Text("Erreur : ${snapshot.error}"));
+          if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("Aucun plan disponible."));
 
-            // Liste de cards
-            Expanded(
-              child: ListView.builder(
-                itemCount: plans.length,
-                itemBuilder: (context, index) {
-                  final plan = plans[index];
-                  return GestureDetector(
+          // --- LOGIQUE DE FILTRAGE RENFORCÉE ---
+          List<SubscriptionPlan> plans = snapshot.data!;
+          if (widget.filterPriorite != null) {
+            plans = plans.where((p) {
+              // 1. Filtre Coût : doit être > 0
+              final num prix = num.tryParse(p.price.toString().replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              final bool isCostValid = prix > 0;
+
+              // 2. Filtre Priorité : conversion forcée en int
+              final int planPriorite = int.tryParse(p.priorite.toString()) ?? 0;
+              final bool isPrioriteValid = planPriorite >= widget.filterPriorite!;
+
+              return isCostValid && isPrioriteValid;
+            }).toList();
+          }
+
+          if (plans.isEmpty) return const Center(child: Text("Aucun plan disponible selon vos critères."));
+
+          return ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+            itemCount: plans.length,
+            itemBuilder: (context, index) {
+              final plan = plans[index];
+              final featureList = (plan.features ?? "").split(',').where((f) => f.trim().isNotEmpty).toList();
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))],
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
                     onTap: () {
-                      Navigator.pop(context, plan['name'] as String);
+                      if (widget.filterPriorite != null) {
+                        Navigator.pop(context, plan); // Retour au menu précédent avec le plan
+                      } else {
+                        Navigator.pop(context);
+                        Navigator.push(context, MaterialPageRoute(builder: (context) => AddStructureScreen(plan: plan.name)));
+                      }
                     },
-                    child: Card(
-                      color: plan['color'] as Color?,
-                      margin: const EdgeInsets.only(bottom: 20),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      elevation: 6,
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Nom du plan avec icône
-                            Row(
-                              children: [
-                                Icon(
-                                  plan['icon'] as IconData,
-                                  color: Colors.white,
-                                  size: 28,
-                                ),
-                                const SizedBox(width: 12),
-                                Text(
-                                  plan['name'] as String,
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-
-                            // Prix
-                            Text(
-                              plan['price'] as String,
-                              style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w500),
-                            ),
-                            const SizedBox(height: 16),
-
-                            // Liste des fonctionnalités avec puces
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: (plan['features'] as List<String>)
-                                  .map((feature) => Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 4),
-                                child: Row(
-                                  crossAxisAlignment:
-                                  CrossAxisAlignment.start,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Header du Plan
+                          Row(
+                            children: [
+                              CircleAvatar(
+                                backgroundColor: (plan.color ?? Colors.orange).withOpacity(0.1),
+                                child: Icon(plan.icon ?? Icons.star, color: plan.color ?? Colors.orange),
+                              ),
+                              const SizedBox(width: 15),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text(
-                                      "• ",
-                                      style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 16),
-                                    ),
-                                    Expanded(
-                                      child: Text(
-                                        feature,
-                                        style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 16),
-                                      ),
-                                    ),
+                                    Text(plan.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                                    Text(plan.price, style: TextStyle(color: plan.color ?? Colors.orange, fontWeight: FontWeight.bold, fontSize: 14)),
                                   ],
                                 ),
-                              ))
-                                  .toList(),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 30),
+                          // Liste des fonctionnalités
+                          if (featureList.isNotEmpty)
+                            ...featureList.map((f) => Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.check, color: plan.color ?? Colors.orange, size: 18),
+                                  const SizedBox(width: 10),
+                                  Expanded(child: Text(f.trim(), style: TextStyle(color: Colors.grey.shade700))),
+                                ],
+                              ),
+                            )),
+                          const SizedBox(height: 15),
+                          // Bouton d'action
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: plan.color ?? Colors.orange,
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                          ],
-                        ),
+                            child: const Center(
+                              child: Text("SÉLECTIONNER CE PLAN", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            ),
+                          )
+                        ],
                       ),
                     ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }

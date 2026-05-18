@@ -1,61 +1,88 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/constants.dart';
+import 'database/database_helper.dart';
+import 'network_checker.dart'; // 👈 IMPORT DU NOUVEAU CHECKER
 
 class AuthService {
+  final DatabaseHelper _dbHelper = DatabaseHelper();
+
   Future<Map<String, dynamic>> login(String identifier, String password) async {
     final url = Uri.parse('$baseUrl/user/login');
 
-    print('➡️ Envoi de la requête à $url');
+    // 1. VRAIE vérification de la disponibilité des micro-services
+    bool serverIsUp = await NetworkChecker.isBackendAccessible();
 
-    final response = await http.post(
-      url,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'identifier': identifier,
-        'password': password,
-      }),
-    );
+    if (serverIsUp) {
+      try {
+        print('➡️ VRAI Mode Online : Envoi à $url');
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'identifier': identifier,
+            'password': password,
+          }),
+        ).timeout(const Duration(seconds: 5)); // Le checker est passé, on peut mettre 5s de timeout sereinement
 
-    print('📥 Réponse brute : ${response.body}');
-    print('🔢 Code HTTP : ${response.statusCode}');
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          String? userId = _extractUserId(data);
 
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
+          if (userId != null) {
+            // ✅ MISE À JOUR DU CACHE LOCAL
+            await _dbHelper.saveOrUpdateUserLocal({
+              'id': userId,
+              'userName': data['userName'] ?? identifier,
+              'userEmail': data['userEmail'],
+              'userPhone': data['userPhone'],
+              'userProfile': data['userProfile'],
+              'codeStructure': data['codeStructure'],
+              'isActive': 1,
+              'updatedAt': DateTime.now().toIso8601String(),
+            });
 
-      // Afficher les clés du JSON pour debug
-      print('🧩 Clés disponibles dans la réponse : ${data.keys}');
-
-      // On essaie plusieurs structures possibles
-      dynamic userId;
-      if (data['id'] != null) {
-        userId = data['id'];
-      } else if (data['user'] != null && data['user']['id'] != null) {
-        userId = data['user']['id'];
-      } else if (data['users'] != null && data['users']['id'] != null) {
-        userId = data['users']['id'];
-      } else if (data['data'] != null && data['data']['id'] != null) {
-        userId = data['data']['id'];
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('userId', userId);
+            return data;
+          }
+        } else {
+          print('🚫 Erreur d\'authentification serveur : ${response.statusCode}');
+          // Optionnel : Si le serveur répond 401/403 (mauvais mot de passe),
+          // on ne veut pas forcément basculer sur le offline si l'utilisateur s'est trompé.
+          // Mais si c'est une erreur 500 (crash micro-service), on laisse le flux glisser vers le offline.
+          if (response.statusCode == 401 || response.statusCode == 403) {
+            throw Exception('❌ Identifiants invalides.');
+          }
+        }
+      } catch (e) {
+        print('⚠️ Problème survenu pendant la requête vers le micro-service : $e');
+        // En cas de coupure de courant ou micro-coupure réseau au moment précis de la requête
       }
-
-      print('👤 ID utilisateur trouvé : $userId');
-
-      if (userId == null) {
-        throw Exception('⚠️ Impossible de trouver le champ "id" dans la réponse : $data');
-      }
-
-      // Sauvegarde dans SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('userId', userId.toString());
-
-      print('💾 ID utilisateur sauvegardé localement : $userId');
-
-      return data;
-    } else {
-      throw Exception(
-        '❌ Erreur de connexion : ${response.statusCode} ${response.reasonPhrase}',
-      );
     }
+
+    // 2. MODE FALLBACK AUTOMATIQUE (Si serveur Down OU si la requête en ligne a échoué)
+    print('📥 Basculement : Tentative de connexion via SQLite (Mode Offline)...');
+    final localUser = await _dbHelper.getUserByIdentifier(identifier);
+
+    if (localUser != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('userId', localUser['id'].toString());
+
+      print('💾 Connexion réussie via base locale pour : $identifier');
+      return localUser;
+    }
+
+    // 3. ÉCHEC TOTAL
+    throw Exception('❌ Serveur indisponible et aucun compte local trouvé pour cet identifiant.');
+  }
+
+  String? _extractUserId(Map<String, dynamic> data) {
+    if (data['id'] != null) return data['id'].toString();
+    if (data['user'] != null && data['user']['id'] != null) return data['user']['id'].toString();
+    if (data['data'] != null && data['data']['id'] != null) return data['data']['id'].toString();
+    return null;
   }
 }

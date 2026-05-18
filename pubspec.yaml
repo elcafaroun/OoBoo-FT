@@ -10,33 +10,31 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  pdf: ^3.10.8
+  printing: ^5.11.0
+  share_plus: ^10.1.0
+  path_provider: ^2.1.2
+  barcode_widget: ^2.0.4
+  provider: ^6.1.1
+  url_launcher: ^6.3.0
+  intl: ^0.19.0
   image_picker: ^1.1.2
   geolocator: ^13.0.1
-
-
-  # 🔗 HTTP pour les appels REST API
   http: ^1.2.2
-
-  # 💾 Stockage local pour l'ID utilisateur et les préférences
   shared_preferences: ^2.3.2
-
-  # 🖼️ Pour la sélection et capture d’images
-
-
-  # 🌙 Icônes Cupertino (style iOS)
   cupertino_icons: ^1.0.8
+  connectivity_plus: ^6.0.0
+  sqflite: ^2.3.0          # Gestion de la base locale
+  path: ^1.9.0             # Utile pour définir le chemin de la base de données
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  # 🧹 Bonnes pratiques et règles de code
   flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
 
-  # 📁 Ajoute ici tes images ou fichiers statiques si besoin :
-  # assets:
-  #   - assets/images/
-  #   - assets/icons/
+  # ✅ C'est ici que doivent être déclarés les assets, au niveau racine du fichier
+  assets:
+    - assets/images/
