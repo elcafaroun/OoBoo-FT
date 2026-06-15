@@ -6,7 +6,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'network_checker.dart'; // 👈 IMPORT DU CHECKER UNIQUE
+import 'package:shared_preferences/shared_preferences.dart'; // ✅ Ajouté pour récupérer le userId local
+import 'network_checker.dart';
 
 class StructureService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
@@ -19,22 +20,36 @@ class StructureService {
     return localImage.path;
   }
 
-  /// 🔹 Création d’une structure (Gestion Photo + Sync Queue)
+  /// 🔹 Création d’une structure (Gestion Photo + Sync Queue avec injection du userId)
   Future<void> createStructure(Map<String, dynamic> data, {File? imageFile}) async {
     String? localPath;
+
+    // 1️⃣ Récupération sécurisée du userId connecté pour l'association multi-structure (PB-M)
+    final prefs = await SharedPreferences.getInstance();
+    final String? userId = prefs.getString('userId');
+    debugPrint("✅ [Login] userId récupéré du serveur : $userId");
+    // Verrou de sécurité : Évite l'envoi d'une requête incomplète au serveur
+    if (userId == null || userId.trim().isEmpty) {
+      debugPrint("❌ [StructureService] Erreur : 'userId' introuvable dans SharedPreferences.");
+      throw Exception("Votre session d'authentification a expiré. Veuillez vous reconnecter.");
+    }
 
     if (imageFile != null) {
       localPath = await _saveImageLocally(imageFile);
       data['photoPath'] = localPath;
     }
 
-    // Vérification de la disponibilité réelle des micro-services
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
 
+    // 2️⃣ MODE ONLINE
     if (serverIsUp) {
       try {
+        // ✅ Mise à jour de l'URL pour passer l'userId requis par le Backend en Query Parameter
+        final String finalUrl = '$baseUrl/structure?userId=${Uri.encodeComponent(userId.trim())}';
+        debugPrint("📡 Envoi POST vers l'API : $finalUrl");
+
         final response = await http.post(
-          Uri.parse('$baseUrl/structure'),
+          Uri.parse(finalUrl),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode(data),
         ).timeout(const Duration(seconds: 5));
@@ -42,14 +57,19 @@ class StructureService {
         if (response.statusCode == 200 || response.statusCode == 201) {
           debugPrint("✅ Structure créée avec succès sur le serveur");
           return;
+        } else {
+          debugPrint("⚠️ Serveur a répondu avec le code : ${response.statusCode}. Bascule vers la file d'attente.");
         }
       } catch (e) {
         debugPrint("⚠️ Échec envoi serveur, mise en file d'attente : $e");
       }
     }
 
-    // 🔄 MODE OFFLINE AUTOMATIQUE : Sauvegarde dans la file d'attente locale SQFlite
+    // 3️⃣ MODE OFFLINE : Sauvegarde dans la file d'attente locale SQFlite
     String entityId = (data['idStructure'] ?? data['id'] ?? "TEMP_${DateTime.now().millisecondsSinceEpoch}").toString();
+
+    // Insertion du userId créateur dans les données locales pour le traitement par le Worker de synchronisation
+    data['createdUserId'] = userId.trim();
 
     await _dbHelper.addToSyncQueue(
         'INSERT',
@@ -72,21 +92,22 @@ class StructureService {
     if (serverIsUp) {
       try {
         final response = await http.get(
-          Uri.parse('$baseUrl/structure/$codeStructure'),
+          Uri.parse('$baseUrl/structure/structure/$codeStructure'),
           headers: {'Content-Type': 'application/json'},
         ).timeout(const Duration(seconds: 5));
 
         if (response.statusCode == 200) {
           final dynamic data = jsonDecode(utf8.decode(response.bodyBytes));
-          await _dbHelper.syncStructuresLocal([data]);
-          return [data];
+          // Gestion du format Liste attendu par l'UI
+          List<dynamic> listData = data is List ? data : [data];
+          await _dbHelper.syncStructuresLocal(listData);
+          return listData;
         }
       } catch (e) {
         debugPrint("⚠️ Erreur réseau getByCode, bascule SQLite : $e");
       }
     }
 
-    // 📥 BASCULE LOCALE : Requête directe dans SQLite
     print("📥 Mode Offline : Récupération de la structure par code depuis SQLite");
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> localData = await db.query(
@@ -97,7 +118,7 @@ class StructureService {
     return localData;
   }
 
-  /// 🔹 Récupérer les structures par Utilisateur (AVEC FILTRAGE LOCAL)
+  /// 🔹 Récupérer les structures par Utilisateur (Online -> Local Fallback)
   Future<List<dynamic>> getStructuresByUser(String userId) async {
     debugPrint('🔍 Recherche structures pour User ID: $userId');
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
@@ -119,7 +140,6 @@ class StructureService {
       }
     }
 
-    // 📥 BASCULE LOCALE : Utilisation de la méthode dédiée du DatabaseHelper
     final localData = await _dbHelper.getLocalStructuresByUser(userId);
     debugPrint("📂 [OFFLINE] Structures trouvées en local : ${localData.length}");
     return localData;
@@ -128,18 +148,15 @@ class StructureService {
   /// 🔹 Mise à jour de la photo d'une structure existante
   Future<void> updatePhoto(String structureId, File imageFile) async {
     String localPath = await _saveImageLocally(imageFile);
-
-    // Persister d'abord l'information localement
     await _dbHelper.updateEntityPhotoPath('structures', structureId, localPath);
 
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
     if (serverIsUp) {
       debugPrint("📡 Connecté : Prêt pour la synchronisation Multipart ultérieure avec le backend.");
-      // Votre MultipartRequest éventuelle viendra s'insérer ici
     }
   }
 
-  /// 🔹 Mise à jour du plan d'abonnement (Action bloquée ou échouée en Offline)
+  /// 🔹 Mise à jour du plan d'abonnement (Action bloquée en Offline)
   Future<void> updateStructurePlan(String id, String planName) async {
     if (!(await NetworkChecker.isBackendAccessible())) {
       throw Exception("📡 Action impossible hors-ligne : Serveur de gestion des abonnements inaccessible.");
@@ -161,7 +178,7 @@ class StructureService {
     }
   }
 
-  /// 🗑️ Suppression d'une structure (Online d'abord avec nettoyage local direct)
+  /// 🗑️ Suppression d'une structure
   Future<void> deleteStructure(String id) async {
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
 
@@ -203,7 +220,7 @@ class StructureService {
         debugPrint("⚠️ Erreur réseau getAllTypeStructures : $e");
       }
     }
-    return []; // Liste vide pour sécuriser l'affichage UI
+    return [];
   }
 
   /// 🔹 Récupération des villes configurées
@@ -225,16 +242,15 @@ class StructureService {
     return [];
   }
 
-  /// 🔹 Vérification de l'unicité d'un nom de structure
+  /// 🔹 Vérification de l'unicité d'un nom de structure (URL mise à jour)
   Future<bool> checkStructureNameExists(String nom) async {
     if (!(await NetworkChecker.isBackendAccessible())) {
-      // En mode déconnecté, on renvoie false pour ne pas bloquer les créations locales temporaires
       return false;
     }
 
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/structure/exists?nom=${Uri.encodeComponent(nom)}'),
+        Uri.parse('$baseUrl/structure/exists?nom=${Uri.encodeComponent(nom.trim())}'),
       ).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {

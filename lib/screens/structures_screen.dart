@@ -36,7 +36,7 @@ class _StructuresScreenState extends State<StructuresScreen> {
     await fetchStructures();
   }
 
-  /// Récupère les structures avec bascule automatique et filtrage par User
+  /// 🔹 Récupère les structures via l'API et synchronise en local
   Future<void> fetchStructures() async {
     if (!mounted) return;
     setState(() => isLoading = true);
@@ -45,59 +45,42 @@ class _StructuresScreenState extends State<StructuresScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final String? profile = prefs.getString('userProfile');
       final String? userId = prefs.getString('userId');
-      final String? codeStructure = prefs.getString('codeStructure');
 
       if (userId == null) {
+        debugPrint("⚠️ Aucun userId trouvé.");
         if (mounted) setState(() => isLoading = false);
         return;
       }
 
-      // 1. TENTATIVE VIA API (BACKEND)
+      // 1️⃣ Tentative API (Endpoint sécurisé par userId)
       try {
-        if (profile == "Administrateur" && (codeStructure ?? '').isEmpty) {
-          rawData = await _structureService.getStructuresByUser(userId);
-        } else if (codeStructure != null && codeStructure.isNotEmpty) {
-          rawData = await _structureService.getStructuresByCode(codeStructure);
-        }
-
-        // Si l'API répond, on synchronise.
-        // Note: Votre syncStructuresLocal doit maintenant gérer le champ createdUserId
+        rawData = await _structureService.getStructuresByUser(userId);
         if (rawData.isNotEmpty) {
           await _dbHelper.syncStructuresLocal(rawData);
         }
       } catch (apiError) {
-        debugPrint("🌐 Backend injoignable, passage au mode local pour l'user $userId");
+        debugPrint("🌐 Backend injoignable, passage en mode local : $apiError");
       }
 
-      // 2. BASCULE (FALLBACK) : Recherche filtrée par USER ID dans SQLite
+      // 2️⃣ Fallback SQLite si API échoue ou vide
       if (rawData.isEmpty) {
-        // Utilisation de la méthode filtrée pour ne pas avoir 0 si l'user est lié
         rawData = await _dbHelper.getLocalStructuresByUser(userId);
-        debugPrint("📂 SQLite : ${rawData.length} structures trouvées pour l'utilisateur.");
       }
 
-      // 3. LOGIQUE DE FILTRAGE (Status & Abonnement)
+      // 3️⃣ Filtrage (Actif et abonnement valide)
       final now = DateTime.now();
-      final List<dynamic> filteredData = rawData.where((s) {
-        // État actif
-        final dynamic activeField = s['isActive'] ?? s['active'];
-        final bool isActive = (activeField == true ||
-            activeField.toString().toLowerCase() == 'true' ||
-            activeField == 1);
+      final filteredData = rawData.where((s) {
+        final dynamic activeField = s['active'] ?? s['isActive'];
+        final bool isActive = (activeField == true || activeField.toString() == '1' || activeField.toString().toLowerCase() == 'true');
 
-        // Date de fin d'abonnement
         final String? endSubStr = s['endSub']?.toString();
-
-        if (endSubStr == null || endSubStr.isEmpty) {
-          return isActive; // En local, si l'info manque, on laisse passer
-        }
+        if (endSubStr == null || endSubStr.isEmpty) return isActive;
 
         try {
           final DateTime endSub = DateTime.parse(endSubStr);
           return isActive && endSub.isAfter(now);
-        } catch (e) {
+        } catch (_) {
           return isActive;
         }
       }).toList();
@@ -109,18 +92,15 @@ class _StructuresScreenState extends State<StructuresScreen> {
         });
       }
     } catch (e) {
-      debugPrint("❌ Erreur critique StructuresScreen : $e");
+      debugPrint("❌ Erreur critique : $e");
       if (mounted) setState(() => isLoading = false);
     }
   }
 
-  // --- Reste du code (UI et Navigation) identique à votre version ---
-
   Future<void> _saveAndNavigate(dynamic structure) async {
     final prefs = await SharedPreferences.getInstance();
-    // Support idStructure (Backend) ou id (SQLite)
     final idStr = (structure['idStructure'] ?? structure['id']).toString();
-    debugPrint("❌ ID STRUCTURE : " + idStr);
+
     await prefs.setString('selected_structure_id', idStr);
     await prefs.setString('selected_structure_name', structure['nomStructure'] ?? 'Inconnu');
     await prefs.setString('codeStructure', structure['codeStructure'] ?? '');
@@ -140,19 +120,18 @@ class _StructuresScreenState extends State<StructuresScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bool canAccessAdmin = userProfile == "Administrateur" || userProfile == "Super admin";
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        title: const Text("Vos Structures",
-            style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
-        iconTheme: const IconThemeData(color: Colors.black87),
+        title: const Text("Nos Business", style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
         actions: [
           IconButton(
             icon: const Icon(Icons.home_rounded, color: Color(0xFFFF9800)),
-            onPressed: () => Navigator.pushAndRemoveUntil(
-                context, MaterialPageRoute(builder: (_) => const HomeScreen()), (r) => false),
+            onPressed: () => Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const HomeScreen()), (r) => false),
           ),
         ],
       ),
@@ -170,14 +149,14 @@ class _StructuresScreenState extends State<StructuresScreen> {
               child: ListView.separated(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 itemCount: allStructures.length,
-                separatorBuilder: (c, i) => const SizedBox(height: 16),
+                separatorBuilder: (_, __) => const SizedBox(height: 16),
                 itemBuilder: (context, index) => _buildStructureCard(allStructures[index]),
               ),
             ),
           ),
         ],
       ),
-      floatingActionButton: userProfile == "Administrateur"
+      floatingActionButton: canAccessAdmin
           ? FloatingActionButton.extended(
         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MonEspaceScreen())),
         label: const Text("Admin", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
@@ -188,44 +167,33 @@ class _StructuresScreenState extends State<StructuresScreen> {
     );
   }
 
-  Widget _buildHeader() {
-    return Padding(
-      padding: const EdgeInsets.all(20.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text("Bonjour,", style: TextStyle(color: Colors.grey, fontSize: 16)),
-              Text("Gérez vos espaces", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          CircleAvatar(
-            backgroundColor: const Color(0xFFFF9800).withOpacity(0.1),
-            child: const Icon(Icons.business_center, color: Color(0xFFFF9800)),
-          )
-        ],
-      ),
-    );
-  }
+  Widget _buildHeader() => const Padding(
+    padding: EdgeInsets.all(20.0),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Bonjour,", style: TextStyle(color: Colors.grey, fontSize: 16)),
+            Text("Gérez vos espaces", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        CircleAvatar(backgroundColor: Color(0x1AFFFF98), child: Icon(Icons.business_center, color: Color(0xFFFF9800)))
+      ],
+    ),
+  );
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.cloud_off, size: 60, color: Colors.grey[300]),
-          const SizedBox(height: 10),
-          const Text("Aucune structure disponible.", style: TextStyle(color: Colors.grey)),
-          TextButton(
-              onPressed: fetchStructures,
-              child: const Text("Réessayer", style: TextStyle(color: Color(0xFFFF9800)))
-          )
-        ],
-      ),
-    );
-  }
+  Widget _buildEmptyState() => Center(
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.cloud_off, size: 60, color: Colors.grey[300]),
+        const Text("Aucune structure active trouvée.", style: TextStyle(color: Colors.grey)),
+        TextButton(onPressed: fetchStructures, child: const Text("Réessayer", style: TextStyle(color: Color(0xFFFF9800)))),
+      ],
+    ),
+  );
 
   Widget _buildStructureCard(dynamic s) {
     String photoUrl = s['photoPath'] ?? s['structPhotoUrl'] ?? '';
@@ -233,13 +201,8 @@ class _StructuresScreenState extends State<StructuresScreen> {
 
     return InkWell(
       onTap: () => _saveAndNavigate(s),
-      borderRadius: BorderRadius.circular(16),
       child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
-        ),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))]),
         child: Column(
           children: [
             ClipRRect(
@@ -247,8 +210,7 @@ class _StructuresScreenState extends State<StructuresScreen> {
               child: AspectRatio(
                 aspectRatio: 16 / 9,
                 child: photoUrl.isNotEmpty && photoUrl.startsWith('http')
-                    ? Image.network(photoUrl, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _defaultImage())
+                    ? Image.network(photoUrl, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _defaultImage())
                     : _defaultImage(),
               ),
             ),
@@ -260,17 +222,9 @@ class _StructuresScreenState extends State<StructuresScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(s['nomStructure'] ?? 'Structure',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                        Text(s['nomStructure'] ?? 'Structure', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                         const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            const Icon(Icons.location_on_outlined, size: 14, color: Colors.grey),
-                            const SizedBox(width: 4),
-                            Text(s['villeStructure'] ?? 'Ville non précisée',
-                                style: const TextStyle(color: Colors.grey, fontSize: 14)),
-                          ],
-                        ),
+                        Text(s['villeStructure'] ?? 'Ville non précisée', style: const TextStyle(color: Colors.grey, fontSize: 14)),
                       ],
                     ),
                   ),

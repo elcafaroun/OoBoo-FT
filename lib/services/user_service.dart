@@ -1,18 +1,24 @@
 import 'dart:convert';
+import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/constants.dart';
 import 'database/database_helper.dart';
-import 'network_checker.dart'; // 👈 Centralise la vérification de disponibilité des micro-services
+import 'network_checker.dart';
 
 class UserService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
-  /// 🔹 Enregistrement (Supporte le code structure optionnel)
+  /// 🔹 Enregistrement (Liaison via Query Parameter conforme au Backend)
   Future<bool> registerUser(String name, String phone, String email, String password, String profile, String? codeStructure) async {
     try {
+      // Construction de l'URL avec le Query Parameter pour la structure cible
+      final String urlString = codeStructure != null && codeStructure.isNotEmpty
+          ? '$baseUrl/user?codeStructure=${Uri.encodeComponent(codeStructure.trim())}'
+          : '$baseUrl/user';
+
       final response = await http.post(
-        Uri.parse('$baseUrl/user'),
+        Uri.parse(urlString),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'userName': name,
@@ -20,7 +26,6 @@ class UserService {
           'userEmail': email,
           'userPassword': password,
           'userProfile': profile,
-          'codeStructure': codeStructure ?? "",
         }),
       );
       return response.statusCode == 200 || response.statusCode == 201;
@@ -30,9 +35,56 @@ class UserService {
     }
   }
 
-  /// 🔹 Connexion Hybride (Online avec Cache / Fallback Offline via SQLite)
+  /// 🔹 Vérifier la disponibilité d'un Email auprès de l'API Spring Boot
+  Future<bool> checkEmailAvailable(String email) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/user/check-email?email=${Uri.encodeComponent(email.trim())}'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final dynamic data = jsonDecode(response.body);
+        // S'adapte si le serveur renvoie un booléen brut ou un objet JSON complet
+        if (data is Map) {
+          return data['available'] ?? false;
+        } else if (data is bool) {
+          return data;
+        }
+      }
+      return false;
+    } catch (e) {
+      print("Erreur lors de la vérification de l'email : $e");
+      return false;
+    }
+  }
+
+  /// 🔹 Vérifier la disponibilité d'un Numéro de Téléphone auprès de l'API Spring Boot
+  Future<bool> checkPhoneAvailable(String phone) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/user/check-phone?phone=${Uri.encodeComponent(phone.trim())}'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        final dynamic data = jsonDecode(response.body);
+        // S'adapte si le serveur renvoie un booléen brut ou un objet JSON complet
+        if (data is Map) {
+          return data['available'] ?? false;
+        } else if (data is bool) {
+          return data;
+        }
+      }
+      return false;
+    } catch (e) {
+      print("Erreur lors de la vérification du téléphone : $e");
+      return false;
+    }
+  }
+
+  /// 🔹 Connexion Hybride (Online Multi-structure / Fallback Offline)
   Future<Map<String, dynamic>> login(String identifier, String password) async {
-    // 1. Vérification réelle de l'accessibilité du micro-service
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
 
     if (serverIsUp) {
@@ -45,24 +97,53 @@ class UserService {
         ).timeout(const Duration(seconds: 5));
 
         if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
+          final data = jsonDecode(utf8.decode(response.bodyBytes));
           String? userId = _extractUserId(data);
 
           if (userId != null) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('userId', userId);
+
+            // Sauvegarde essentielle du profil pour filtrer les accès UI (Admin/Super Admin)
+            final String? profile = data['userProfile'];
+            if (profile != null) {
+              await prefs.setString('userProfile', profile);
+            }
+
+            // Gestion de la liste des structures retournées (PB-M multi-structure)
+            List<dynamic> userStructures = data['structures'] ?? [];
+            String? defaultCodeStructure;
+            String? defaultRole;
+
+            if (userStructures.isNotEmpty) {
+              // Par défaut, on sélectionne la première structure retournée
+              final firstStruct = userStructures.first;
+              defaultCodeStructure = firstStruct['codeStructure'];
+              defaultRole = firstStruct['roleInStructure'];
+
+              await prefs.setString('codeStructure', defaultCodeStructure ?? "");
+              await prefs.setString('userRoleInStructure', defaultRole ?? "");
+
+              // Sauvegarder la liste complète en JSON String pour l'UI de switch d'espace
+              await prefs.setString('cached_user_structures', jsonEncode(userStructures));
+            }
+
             // ✅ MISE À JOUR DU CACHE SQLITE LOCAL
             await _dbHelper.saveOrUpdateUserLocal({
               'id': userId,
               'userName': data['userName'] ?? identifier,
               'userEmail': data['userEmail'],
               'userPhone': data['userPhone'],
-              'userProfile': data['userProfile'],
-              'codeStructure': data['codeStructure'],
+              'userProfile': profile,
+              'codeStructure': defaultCodeStructure,
+              'codeUser': data['codeUser'],
               'isActive': 1,
               'updatedAt': DateTime.now().toIso8601String(),
             });
 
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('userId', userId);
+            if (data['codeUser'] != null) {
+              await prefs.setString('codeUser', data['codeUser'].toString());
+            }
 
             return data;
           }
@@ -72,11 +153,10 @@ class UserService {
         }
       } catch (e) {
         print('⚠️ Micro-coupure ou problème lors de la requête en ligne : $e');
-        // On laisse le code continuer vers le mode hors-ligne en dessous
       }
     }
 
-    // 2. MODE FALLBACK AUTOMATIQUE (Exécuté si serveur DOWN ou si la requête a échoué)
+    // 2️⃣ MODE FALLBACK AUTOMATIQUE OFFLINE
     print('📥 Basculement : Tentative de connexion via SQLite (Mode Offline)...');
     final localUser = await _dbHelper.getUserByIdentifier(identifier);
 
@@ -84,26 +164,40 @@ class UserService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('userId', localUser['id'].toString());
 
-      print('💾 Connexion réussie hors-ligne via SQLite pour : $identifier');
+      if (localUser['userProfile'] != null) {
+        await prefs.setString('userProfile', localUser['userProfile'].toString());
+      }
+      if (localUser['codeUser'] != null) {
+        await prefs.setString('codeUser', localUser['codeUser'].toString());
+      }
+      if (localUser['codeStructure'] != null) {
+        await prefs.setString('codeStructure', localUser['codeStructure'].toString());
+      }
 
-      // On retourne la structure attendue par l'UI, simulée depuis SQLite
+      print('💾 Connexion réussie hors-ligne via SQLite pour : $identifier');
       return Map<String, dynamic>.from(localUser);
     }
 
-    // 3. ÉCHEC TOTAL
     throw Exception('❌ Connexion impossible. Serveur injoignable et aucun identifiant local correspondant.');
   }
 
-  /// 🔹 Récupérer les utilisateurs d'une structure
   Future<List<dynamic>> getAllUsersByStructure(String codeStructure) async {
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/user/structure/$codeStructure'),
+        Uri.parse('$baseUrl/user/users/$codeStructure'),
         headers: {'Content-Type': 'application/json'},
       );
-      return response.statusCode == 200 ? jsonDecode(response.body) : [];
+
+      // 🔍 AFFICHEZ CECI POUR VOIR LE JSON BRUT
+      debugPrint("DEBUG JSON REÇU : ${response.body}");
+
+      if (response.statusCode == 200) {
+        return jsonDecode(utf8.decode(response.bodyBytes));
+      } else {
+        return [];
+      }
     } catch (e) {
-      print("Erreur récupération utilisateurs : $e");
+      debugPrint("Erreur récupération : $e");
       return [];
     }
   }
@@ -123,22 +217,23 @@ class UserService {
     }
   }
 
-  /// 🔹 Activer/Désactiver
+  /// 🔹 Activer/Désactiver l'accès d'un compte utilisateur
   Future<bool> toggleUserStatus(String id, bool shouldEnable) async {
+    final String action = shouldEnable ? "enable" : "disable";
+
     try {
-      final String action = shouldEnable ? "enable" : "disable";
       final response = await http.patch(
         Uri.parse('$baseUrl/user/$action/$id'),
         headers: {'Content-Type': 'application/json'},
       );
       return response.statusCode == 200 || response.statusCode == 204;
     } catch (e) {
-      print("Erreur changement de statut : $e");
+      print("Erreur changement de statut : $action - $e");
       return false;
     }
   }
 
-  /// 🔹 Réinitialiser le mot de passe
+  /// 🔹 Réinitialiser le mot de passe d'un utilisateur
   Future<bool> resetPassword(String userId, String newPassword) async {
     try {
       final response = await http.patch(
@@ -153,11 +248,26 @@ class UserService {
     }
   }
 
-  /// 🔹 Outil interne pour extraire l'ID utilisateur de formats JSON variés
+  /// 🔹 Utilitaire d'extraction robuste pour localiser l'ID utilisateur dans les formats de payloads
   String? _extractUserId(Map<String, dynamic> data) {
     if (data['id'] != null) return data['id'].toString();
     if (data['user'] != null && data['user']['id'] != null) return data['user']['id'].toString();
     if (data['data'] != null && data['data']['id'] != null) return data['data']['id'].toString();
     return null;
+  }
+
+  /// 🔹 Mettre à jour le mot de passe initial
+  Future<bool> changeFirstPassword(String userId, String newPassword) async {
+    try {
+      final response = await http.patch(
+        Uri.parse('$baseUrl/user/change-password/$userId'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'newPassword': newPassword}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print("Erreur changement premier mot de passe : $e");
+      return false;
+    }
   }
 }

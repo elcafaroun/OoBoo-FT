@@ -21,21 +21,42 @@ class _UserListScreenState extends State<UserListScreen> {
     _fetchUsers();
   }
 
-  int get activeCount => users.where((u) => (u['active'] ?? u['isActive'] ?? false)).length;
+  // ✅ Prise en compte des variantes de clés API (active, isActive, ou 1/0)
+  int get activeCount => users.where((u) {
+    final dynamic activeField = u['active'] ?? u['isActive'];
+    return activeField == true || activeField == 1 || activeField.toString().toLowerCase() == 'true';
+  }).length;
 
   Future<void> _fetchUsers() async {
+    if (!mounted) return;
     setState(() => isLoading = true);
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      final String? structureId = prefs.getString('selected_structure_id');
-      if (structureId != null) {
+
+      // 🛠️ STRATÉGIE DE SECOURS POUR LES CLÉS DE STRUCTURE
+      // Récupère d'abord l'ID sélectionné, sinon le codeStructure global de session
+      final String? structureId = prefs.getString('selected_structure_id') ?? prefs.getString('codeStructure');
+
+      debugPrint("🔍 Tentative de récupération des agents pour la structure : $structureId");
+
+      if (structureId != null && structureId.isNotEmpty) {
         final fetchedUsers = await _userService.getAllUsersByStructure(structureId);
-        setState(() { users = fetchedUsers; isLoading = false; });
+
+        if (mounted) {
+          setState(() {
+            users = fetchedUsers ?? [];
+            isLoading = false;
+          });
+          debugPrint("👥 Nombre d'agents récupérés : ${users.length}");
+        }
       } else {
-        setState(() => isLoading = false);
+        debugPrint("⚠️ Aucun identifiant de structure trouvé dans les SharedPreferences.");
+        if (mounted) setState(() => isLoading = false);
       }
     } catch (e) {
-      setState(() => isLoading = false);
+      debugPrint("❌ Erreur lors de la récupération des agents : $e");
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
@@ -43,12 +64,19 @@ class _UserListScreenState extends State<UserListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC), // Bleu-gris très clair, très moderne
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         title: const Text("Gestion des Agents", style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.white,
         elevation: 0.5,
         centerTitle: true,
+        // Optionnel : permet de recharger manuellement les données depuis l'AppBar
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.orange),
+            onPressed: _fetchUsers,
+          )
+        ],
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator(color: Colors.orange))
@@ -58,20 +86,27 @@ class _UserListScreenState extends State<UserListScreen> {
           Expanded(
             child: users.isEmpty
                 ? _buildEmptyState()
-                : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemCount: users.length,
-              itemBuilder: (context, index) => _buildAgentCard(users[index]),
+                : RefreshIndicator(
+              onRefresh: _fetchUsers,
+              color: Colors.orange,
+              child: ListView.separated(
+                padding: const EdgeInsets.all(16),
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemCount: users.length,
+                itemBuilder: (context, index) => _buildAgentCard(users[index]),
+              ),
             ),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterScreen(isFromLogin: false))).then((_) => _fetchUsers()),
+        onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const RegisterScreen(isFromLogin: false))
+        ).then((_) => _fetchUsers()), // Rechargement automatique au retour de l'écran d'ajout
         backgroundColor: const Color(0xFFFF9800),
         icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text("Ajouter un agent", style: TextStyle(fontWeight: FontWeight.bold)),
+        label: const Text("Ajouter un agent", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
       ),
     );
   }
@@ -110,7 +145,15 @@ class _UserListScreenState extends State<UserListScreen> {
   }
 
   Widget _buildAgentCard(dynamic user) {
-    final bool isActive = user['active'] ?? user['isActive'] ?? false;
+    // ✅ Gestion adaptative des différents types de données (booléens ou entiers MySQL)
+    final dynamic activeField = user['active'] ?? user['isActive'];
+    final bool isActive = activeField == true || activeField == 1 || activeField.toString().toLowerCase() == 'true';
+
+    // ✅ Fallback sécurisé pour le nom de l'agent (supporte userName, name, et username)
+    final String displayName = user['userName'] ?? user['name'] ?? user['username'] ?? "Agent sans nom";
+
+    // ✅ Fallback sécurisé pour le profil de l'agent
+    final String displayProfile = user['userProfile'] ?? user['profile'] ?? "Vente";
 
     return Container(
       decoration: BoxDecoration(
@@ -122,13 +165,20 @@ class _UserListScreenState extends State<UserListScreen> {
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: CircleAvatar(
           backgroundColor: isActive ? Colors.orange.shade50 : Colors.grey.shade100,
-          child: Text(user['userName']?[0] ?? "?", style: TextStyle(color: isActive ? Colors.orange : Colors.grey, fontWeight: FontWeight.bold)),
+          child: Text(
+            displayName.isNotEmpty ? displayName[0].toUpperCase() : "?",
+            style: TextStyle(color: isActive ? Colors.orange : Colors.grey, fontWeight: FontWeight.bold),
+          ),
         ),
-        title: Text(user['userName'] ?? "Inconnu", style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text("${user['userProfile']}", style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+        title: Text(displayName, style: const TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text(displayProfile, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
-          onSelected: (value) { /* Appelez ici vos fonctions de gestion (edit, reset, etc.) */ },
+          onSelected: (value) {
+            if (value == 'toggle') {
+              // Intégrez ici votre logique de changement de statut si nécessaire
+            }
+          },
           itemBuilder: (context) => [
             const PopupMenuItem(value: 'edit', child: Text("Modifier")),
             const PopupMenuItem(value: 'toggle', child: Text("Activer/Désactiver")),
@@ -140,13 +190,22 @@ class _UserListScreenState extends State<UserListScreen> {
 
   Widget _buildEmptyState() {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.person_search, size: 80, color: Colors.grey.shade300),
-          const SizedBox(height: 16),
-          const Text("Aucun agent enregistré", style: TextStyle(fontSize: 16, color: Colors.grey)),
-        ],
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(), // Permet le "Pull to refresh" même si c'est vide
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.person_search, size: 80, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            const Text("Aucun agent enregistré dans cette structure", style: TextStyle(fontSize: 16, color: Colors.grey)),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: _fetchUsers,
+              icon: const Icon(Icons.refresh, color: Colors.orange),
+              label: const Text("Actualiser", style: TextStyle(color: Colors.orange)),
+            )
+          ],
+        ),
       ),
     );
   }

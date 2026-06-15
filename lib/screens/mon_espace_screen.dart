@@ -26,36 +26,33 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
   Future<void> _loadStructures() async {
     if (!mounted) return;
     setState(() => isLoading = true);
-    final prefs = await SharedPreferences.getInstance();
-    final String? userId = prefs.getString('userId');
-    final String? codeStructure = prefs.getString('codeStructure');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? userId = prefs.getString('userId');
+      final String? codeStructure = prefs.getString('codeStructure');
+      if (userId != null) {
+        List<dynamic> result = [];
 
-    if (userId != null) {
-      if ((codeStructure ?? '').isEmpty) {
-        final result = await _structureService.getStructuresByUser(userId);
-        if (mounted)
+          result = await _structureService.getStructuresByUser(userId);
+
+        if (mounted) {
           setState(() {
             userStructures = result;
             isLoading = false;
           });
-      } else {
-        if ((codeStructure ?? '').isNotEmpty) {
-          final result = await _structureService.getStructuresByCode(codeStructure!);
-          if (mounted)
-            setState(() {
-              userStructures = result;
-              isLoading = false;
-            });
         }
+      } else {
+        if (mounted) setState(() => isLoading = false);
       }
-    } else {
+    } catch (e) {
+      debugPrint("❌ Erreur chargement structures admin : $e");
       if (mounted) setState(() => isLoading = false);
     }
   }
 
   Future<void> _handleSubscriptionAction(dynamic s, bool isExpired) async {
     final String structureId =
-        (s['id'] ?? s['structureId'] ?? s['idStructure']).toString();
+    (s['id'] ?? s['structureId'] ?? s['idStructure']).toString();
     final int currentPriorite =
         int.tryParse(s['priorite']?.toString() ?? '0') ?? 0;
 
@@ -66,18 +63,20 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
     );
 
     if (selectedPlan != null) {
-      setState(() => isLoading = true);
+      if (mounted) setState(() => isLoading = true);
       try {
         await _structureService.updateStructurePlan(
             structureId, selectedPlan.name);
-        _loadStructures();
-        if (mounted)
+        await _loadStructures();
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text("✅ Mise à jour effectuée !")));
+        }
       } catch (e) {
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(context)
               .showSnackBar(SnackBar(content: Text("Erreur : $e")));
+        }
       } finally {
         if (mounted) setState(() => isLoading = false);
       }
@@ -118,20 +117,20 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       ),
       body: isLoading
           ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFF9800)))
+          child: CircularProgressIndicator(color: Color(0xFFFF9800)))
           : Column(
-              children: [
-                _buildHeaderStats(),
-                Expanded(
-                  child: ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    itemCount: userStructures.length,
-                    itemBuilder: (context, index) =>
-                        _buildProCard(userStructures[index]),
-                  ),
-                ),
-              ],
+        children: [
+          _buildHeaderStats(),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              itemCount: userStructures.length,
+              itemBuilder: (context, index) =>
+                  _buildProCard(userStructures[index]),
             ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -147,7 +146,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
         children: [
           const Text("TOTAL STRUCTURES",
               style:
-                  TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           Text("${userStructures.length}",
               style: const TextStyle(
                   color: Colors.white,
@@ -183,33 +182,35 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       ),
       child: Column(
         children: [
-          // InkWell encapsule uniquement le haut pour la navigation
           Material(
             color: Colors.transparent,
             child: InkWell(
               borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(16)),
+              const BorderRadius.vertical(top: Radius.circular(16)),
               onTap: () async {
-                // <--- Ajout de async ici
-                // 1. Extraire les variables nécessaires depuis l'objet 's'
                 final SharedPreferences prefs =
-                    await SharedPreferences.getInstance();
-                final String id =
-                    (s['id'] ?? s['structureId'] ?? s['idStructure'])
-                        .toString();
-                final String name = s['nomStructure'] ?? 'Structure';
-                await prefs.setString('selected_structure_id', id);
+                await SharedPreferences.getInstance();
 
-                // 2. Vérification de sécurité (bonne pratique Flutter)
+                final String currentId =
+                (s['id'] ?? s['structureId'] ?? s['idStructure']).toString();
+                final String currentName = s['nomStructure'] ?? 'Structure';
+                final String currentCode = s['codeStructure'] ?? '';
+
+                // ✅ STOCKAGE DES ACCÈS COMPLETS DE LA STRUCTURE SÉLECTIONNÉE
+                await prefs.setString('selected_structure_id', currentId);
+                await prefs.setString('selected_structure_name', currentName);
+                await prefs.setString('codeStructure', currentCode); // Capital pour filtrer la liste des agents
+
+                debugPrint("⚙️ [Administration] Structure active mémorisée : ID=$currentId | Code=$currentCode");
+
                 if (!context.mounted) return;
 
-                // 3. Passer les variables séparément
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (_) => StructureCategoriesScreen(
-                      structureId: id,
-                      structureName: name,
+                      structureId: currentId,
+                      structureName: currentName,
                     ),
                   ),
                 );
@@ -235,7 +236,6 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
             ),
           ),
           const Divider(height: 1),
-          // Boutons du bas inchangés
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             child: Row(
@@ -252,9 +252,11 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                 ),
                 const Spacer(),
                 IconButton(
-                  onPressed: () => _structureService
-                      .deleteStructure(id)
-                      .then((_) => _loadStructures()),
+                  onPressed: () {
+                    _structureService
+                        .deleteStructure(id)
+                        .then((_) => _loadStructures());
+                  },
                   icon: const Icon(Icons.delete_outline,
                       color: Colors.red, size: 20),
                 )

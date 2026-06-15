@@ -7,8 +7,8 @@ class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
   static Database? _database;
 
-  // Version 2 : Support de la colonne endSub et indexation
-  static const int _dbVersion = 2;
+  // Version 3 : Ajout du support de la colonne codeUser pour l'alignement des agents
+  static const int _dbVersion = 3;
 
   factory DatabaseHelper() => _instance;
   DatabaseHelper._internal();
@@ -35,12 +35,23 @@ class DatabaseHelper {
   }
 
   Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    // Évolution vers version 2 (Gérée historiquement)
     if (oldVersion < 2) {
       try {
         await db.execute('ALTER TABLE structures ADD COLUMN endSub TEXT');
         debugPrint("✅ Migration : Colonne endSub ajoutée.");
       } catch (e) {
         debugPrint("⚠️ Migration endSub ignorée : $e");
+      }
+    }
+
+    // Évolution vers version 3 (Ajout de codeUser sans casser l'historique)
+    if (oldVersion < 3) {
+      try {
+        await db.execute('ALTER TABLE users ADD COLUMN codeUser TEXT');
+        debugPrint("✅ Migration : Colonne codeUser ajoutée à la table users.");
+      } catch (e) {
+        debugPrint("⚠️ Migration codeUser ignorée : $e");
       }
     }
   }
@@ -55,6 +66,7 @@ class DatabaseHelper {
         userPhone TEXT,
         userProfile TEXT,
         codeStructure TEXT,
+        codeUser TEXT, -- ✅ Ajouté dans le script de création initiale de la V3
         isActive INTEGER,
         version INTEGER,
         updatedAt TEXT
@@ -184,6 +196,7 @@ class DatabaseHelper {
       'userPhone': userData['userPhone'],
       'userProfile': userData['userProfile'],
       'codeStructure': userData['codeStructure'],
+      'codeUser': userData['codeUser'], // ✅ Persistance de la nouvelle propriété récupérée de l'API
       'isActive': userData['isActive'] == true ? 1 : 0,
       'version': userData['version'] ?? 0,
       'updatedAt': userData['updatedAt'] ?? DateTime.now().toIso8601String(),
@@ -318,7 +331,6 @@ class DatabaseHelper {
       return [];
     } else {
       debugPrint("📊 [DEBUG] Nombre total de lignes dans SQLite : ${allData.length}");
-      // Log du premier élément pour vérifier le format des colonnes
       debugPrint("📝 [DEBUG] Format 1ère ligne : ID=${allData.first['id']}, User=${allData.first['createdUserId']}, Active=${allData.first['isActive']}");
     }
 
@@ -350,10 +362,6 @@ class DatabaseHelper {
 
     return result;
   }
-
-
-
-
 
   Future<List<Map<String, dynamic>>> getLocalCategories() async {
     final db = await database;
@@ -456,20 +464,15 @@ class DatabaseHelper {
     final db = await database;
     await db.delete('customers', where: 'id = ?', whereArgs: [id]);
   }
-  /// Récupère un produit spécifique par son ID depuis la base locale SQLite
+
   Future<Map<String, dynamic>?> getProductById(String id) async {
-    final db = await database; // Récupère votre instance de base de données
-
+    final db = await database;
     final List<Map<String, dynamic>> maps = await db.query(
-      'products',          // Le nom de votre table SQLite pour les produits
-      where: 'id = ?',     // La condition de recherche
-      whereArgs: [id],     // L'ID recherché
-      limit: 1,            // On ne veut qu'un seul résultat maximum
+      'products',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
     );
-
-    if (maps.isNotEmpty) {
-      return maps.first;
-    }
-    return null; // Retourne null si le produit n'existe pas en local
+    return maps.isNotEmpty ? maps.first : null;
   }
 }

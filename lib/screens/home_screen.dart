@@ -25,12 +25,6 @@ class _HomeScreenState extends State<HomeScreen> {
   int _pendingSyncCount = 0;
   bool _isInitialSyncing = true;
   String _loadingMessage = "Initialisation de l'application...";
-  bool _isServerUnreachable = false;
-
-  // 📝 Variables de Debug à afficher sur l'écran de chargement
-  String _sqliteDebugInfo = "Analyse de la base locale...";
-  List<Map<String, dynamic>> _sampleLocalProducts = [];
-  List<Map<String, dynamic>> _sampleLocalCategories = [];
 
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final SyncService _syncService = SyncService();
@@ -41,66 +35,11 @@ class _HomeScreenState extends State<HomeScreen> {
     _handleStartup();
   }
 
-  /// Vérifie l'état profond de la base SQLite et extrait des infos de debug (Structures, Produits, Catégories)
-  Future<bool> _hasMinimumLocalData() async {
-    try {
-      final db = await _dbHelper.database;
-
-      // 1. Compte des structures
-      final List<Map<String, dynamic>> resStructures = await db.rawQuery(
-          "SELECT COUNT(*) as count FROM structures"
-      );
-      int structuresCount = resStructures.first['count'] as int;
-
-      // 2. Compte des produits
-      final List<Map<String, dynamic>> resProducts = await db.rawQuery(
-          "SELECT COUNT(*) as count FROM products"
-      );
-      int productsCount = resProducts.first['count'] as int;
-
-      // 3. Compte des catégories (Ajouté)
-      final List<Map<String, dynamic>> resCategories = await db.rawQuery(
-          "SELECT COUNT(*) as count FROM categories"
-      );
-      int categoriesCount = resCategories.first['count'] as int;
-
-      // 4. Récupération d'un échantillon (les 3 premiers de chaque)
-      List<Map<String, dynamic>> sampleProducts = [];
-      if (productsCount > 0) {
-        sampleProducts = await db.rawQuery("SELECT * FROM products LIMIT 3");
-      }
-
-      List<Map<String, dynamic>> sampleCategories = [];
-      if (categoriesCount > 0) {
-        sampleCategories = await db.rawQuery("SELECT * FROM categories LIMIT 3");
-      }
-
-      if (mounted) {
-        setState(() {
-          _sqliteDebugInfo = "🏢 Struct: $structuresCount | 📁 Cat: $categoriesCount | 📦 Prod: $productsCount";
-          _sampleLocalProducts = sampleProducts;
-          _sampleLocalCategories = sampleCategories;
-        });
-      }
-
-      debugPrint("📊 [Vérification SQLite] $_sqliteDebugInfo");
-      return structuresCount > 0 && productsCount > 0;
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _sqliteDebugInfo = "🚨 Erreur de lecture SQLite: $e";
-        });
-      }
-      return false;
-    }
-  }
-
-  /// Gère le chargement complet au démarrage
+  /// Gère le chargement complet au démarrage (Sans blocage internet)
   Future<void> _handleStartup() async {
     setState(() {
       _isInitialSyncing = true;
-      _isServerUnreachable = false;
-      _loadingMessage = "Vérification des connexions...";
+      _loadingMessage = "Vérification de la connexion...";
     });
 
     final minimumWait = Future.delayed(const Duration(seconds: 2));
@@ -109,41 +48,33 @@ class _HomeScreenState extends State<HomeScreen> {
       // 1. Charger les préférences utilisateur
       await _loadUserProfile();
 
-      // 2. Appel du NetworkChecker statique 📡
+      // 2. Vérification de l'accès au serveur central 📡
       bool isServerOnline = await NetworkChecker.isBackendAccessible();
 
       if (isServerOnline) {
         if (_codeStructure != null && _userId != null) {
-          setState(() => _loadingMessage = "Serveur détecté !\nSynchronisation du catalogue...");
+          setState(() => _loadingMessage = "Serveur en ligne !\nRafraîchissement des données...");
           await _syncService.refreshLocalData(_codeStructure!, _userId!);
         }
       } else {
-        debugPrint("📡 Le serveur est injoignable d'après NetworkChecker. Tentative de basculement hors-ligne.");
+        debugPrint("📡 Le serveur est injoignable. Mode hors-ligne activé automatiquement.");
       }
 
       // 3. Mettre à jour le compteur de la file d'attente locale
       await _refreshPendingCount();
 
     } catch (e, stacktrace) {
-      debugPrint("🚨 Erreur critique lors du démarrage dans l'UI : $e");
+      debugPrint("🚨 Erreur lors du démarrage : $e");
       debugPrint(stacktrace.toString());
     } finally {
       await minimumWait;
 
-      // 4. Stratégie de résilience : a-t-on le cache minimum nécessaire pour ouvrir l'application ?
-      bool localDataExists = await _hasMinimumLocalData();
-
+      // ✅ STRATÉGIE OFF-LINE FIRST ACCÉLÉRÉE :
+      // Qu'il y ait des données locales ou non, on libère l'accès à l'interface.
       if (mounted) {
-        if (!localDataExists) {
-          setState(() {
-            _loadingMessage = "Le serveur est injoignable et aucun catalogue local n'a été trouvé.\n\nVeuillez vous connecter à Internet lors du premier démarrage pour initialiser les données.";
-            _isServerUnreachable = true;
-          });
-        } else {
-          setState(() {
-            _isInitialSyncing = false;
-          });
-        }
+        setState(() {
+          _isInitialSyncing = false;
+        });
       }
     }
   }
@@ -230,74 +161,14 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (!_isServerUnreachable)
-                  const CircularProgressIndicator(color: Color(0xFFFF9800))
-                else
-                  const Icon(Icons.cloud_off_rounded, size: 60, color: Colors.redAccent),
+                const CircularProgressIndicator(color: Color(0xFFFF9800)),
                 const SizedBox(height: 30),
                 Text(_loadingMessage,
                     textAlign: TextAlign.center,
                     style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Colors.black87)),
                 const SizedBox(height: 10),
-                if (!_isServerUnreachable)
-                  const Text("Préparation de votre espace de travail...",
-                      style: TextStyle(fontSize: 12, color: Colors.grey))
-                else ...[
-                  const SizedBox(height: 15),
-                  ElevatedButton.icon(
-                    onPressed: _handleStartup,
-                    icon: const Icon(Icons.refresh, color: Colors.white),
-                    label: const Text("Réessayer la connexion", style: TextStyle(color: Colors.white)),
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF9800)),
-                  ),
-
-                  // 🎛️ CONSOLE LIVE (SQLite Debug étendu)
-                  const SizedBox(height: 35),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[100],
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.grey[300]!),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.bug_report, size: 16, color: Colors.blueGrey),
-                            SizedBox(width: 5),
-                            Text("CONSOLE LIVE (SQLite Debug)",
-                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
-                          ],
-                        ),
-                        const Divider(),
-                        Text(_sqliteDebugInfo,
-                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.black87, fontWeight: FontWeight.bold)),
-                        const Divider(height: 20),
-
-                        // Section Catégories
-                        const Text("📁 Catégories trouvées :", style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-                        if (_sampleLocalCategories.isNotEmpty)
-                          ..._sampleLocalCategories.map((c) => Text("  • ${c['name'] ?? c['designation'] ?? c['id']}",
-                              style: const TextStyle(fontSize: 11, color: Colors.blue, fontFamily: 'monospace')))
-                        else
-                          const Text("  ⚠️ Aucune catégorie en base locale.", style: TextStyle(fontSize: 11, color: Colors.redAccent)),
-
-                        const SizedBox(height: 15),
-
-                        // Section Produits
-                        const Text("📦 Produits trouvés :", style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-                        if (_sampleLocalProducts.isNotEmpty)
-                          ..._sampleLocalProducts.map((p) => Text("  • ${p['name'] ?? p['designation'] ?? p['id']}",
-                              style: const TextStyle(fontSize: 11, color: Colors.green, fontFamily: 'monospace')))
-                        else
-                          const Text("  ⚠️ Aucun produit en base locale.", style: TextStyle(fontSize: 11, color: Colors.redAccent)),
-                      ],
-                    ),
-                  )
-                ]
+                const Text("Préparation de votre espace de travail...",
+                    style: TextStyle(fontSize: 12, color: Colors.grey))
               ],
             ),
           ),
@@ -349,7 +220,7 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 15),
               _buildMenuGrid(isVente),
               const SizedBox(height: 30),
-              _buildAssistanceSection(),
+
             ],
           ),
         ),
@@ -397,7 +268,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Expanded(
                 child: _buildMenuCard(
-                    title: "Boutiques",
+                    title: "Commencer",
                     subtitle: "Mes structures",
                     icon: Icons.storefront_rounded,
                     color: Colors.orange,
@@ -463,32 +334,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildAssistanceSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text("ASSISTANCE", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, letterSpacing: 1.2)),
-        const SizedBox(height: 15),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
-          ),
-          child: Column(
-            children: [
-              _buildContactItem(Icons.chat_bubble_outline, "WhatsApp", "61 61 61 34"),
-              const Divider(),
-              _buildContactItem(Icons.email_outlined, "Mail", "OoBou@c4us.io"),
-              const Divider(),
-              _buildContactItem(Icons.phone_outlined, "Appel", "76 17 48 49"),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+
 
   Widget _buildContactItem(IconData icon, String label, String value) {
     return Padding(
