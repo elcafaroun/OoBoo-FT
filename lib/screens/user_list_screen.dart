@@ -21,7 +21,6 @@ class _UserListScreenState extends State<UserListScreen> {
     _fetchUsers();
   }
 
-  // ✅ Prise en compte des variantes de clés API (active, isActive, ou 1/0)
   int get activeCount => users.where((u) {
     final dynamic activeField = u['active'] ?? u['isActive'];
     return activeField == true || activeField == 1 || activeField.toString().toLowerCase() == 'true';
@@ -33,34 +32,25 @@ class _UserListScreenState extends State<UserListScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      // 🛠️ STRATÉGIE DE SECOURS POUR LES CLÉS DE STRUCTURE
-      // Récupère d'abord l'ID sélectionné, sinon le codeStructure global de session
       final String? structureId = prefs.getString('selected_structure_id') ?? prefs.getString('codeStructure');
-
-      debugPrint("🔍 Tentative de récupération des agents pour la structure : $structureId");
 
       if (structureId != null && structureId.isNotEmpty) {
         final fetchedUsers = await _userService.getAllUsersByStructure(structureId);
-
         if (mounted) {
           setState(() {
             users = fetchedUsers ?? [];
             isLoading = false;
           });
-          debugPrint("👥 Nombre d'agents récupérés : ${users.length}");
         }
       } else {
-        debugPrint("⚠️ Aucun identifiant de structure trouvé dans les SharedPreferences.");
         if (mounted) setState(() => isLoading = false);
       }
     } catch (e) {
-      debugPrint("❌ Erreur lors de la récupération des agents : $e");
+      debugPrint("❌ Erreur : $e");
       if (mounted) setState(() => isLoading = false);
     }
   }
 
-  // --- UI BUILDER ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -70,7 +60,6 @@ class _UserListScreenState extends State<UserListScreen> {
         backgroundColor: Colors.white,
         elevation: 0.5,
         centerTitle: true,
-        // Optionnel : permet de recharger manuellement les données depuis l'AppBar
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh, color: Colors.orange),
@@ -103,15 +92,13 @@ class _UserListScreenState extends State<UserListScreen> {
         onPressed: () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const RegisterScreen(isFromLogin: false))
-        ).then((_) => _fetchUsers()), // Rechargement automatique au retour de l'écran d'ajout
+        ).then((_) => _fetchUsers()),
         backgroundColor: const Color(0xFFFF9800),
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text("Ajouter un agent", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
       ),
     );
   }
-
-  // --- WIDGETS DÉDIÉS ---
 
   Widget _buildModernHeader() {
     return Container(
@@ -145,14 +132,9 @@ class _UserListScreenState extends State<UserListScreen> {
   }
 
   Widget _buildAgentCard(dynamic user) {
-    // ✅ Gestion adaptative des différents types de données (booléens ou entiers MySQL)
     final dynamic activeField = user['active'] ?? user['isActive'];
     final bool isActive = activeField == true || activeField == 1 || activeField.toString().toLowerCase() == 'true';
-
-    // ✅ Fallback sécurisé pour le nom de l'agent (supporte userName, name, et username)
     final String displayName = user['userName'] ?? user['name'] ?? user['username'] ?? "Agent sans nom";
-
-    // ✅ Fallback sécurisé pour le profil de l'agent
     final String displayProfile = user['userProfile'] ?? user['profile'] ?? "Vente";
 
     return Container(
@@ -174,14 +156,24 @@ class _UserListScreenState extends State<UserListScreen> {
         subtitle: Text(displayProfile, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
-          onSelected: (value) {
+          onSelected: (value) async {
             if (value == 'toggle') {
-              // Intégrez ici votre logique de changement de statut si nécessaire
+              try {
+                await _userService.toggleUserStatus(user['id'], !isActive);
+                _fetchUsers();
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Erreur lors de la mise à jour")),
+                );
+              }
             }
           },
           itemBuilder: (context) => [
             const PopupMenuItem(value: 'edit', child: Text("Modifier")),
-            const PopupMenuItem(value: 'toggle', child: Text("Activer/Désactiver")),
+            PopupMenuItem(
+                value: 'toggle',
+                child: Text(isActive ? "Désactiver l'agent" : "Activer l'agent")
+            ),
           ],
         ),
       ),
@@ -190,22 +182,13 @@ class _UserListScreenState extends State<UserListScreen> {
 
   Widget _buildEmptyState() {
     return Center(
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(), // Permet le "Pull to refresh" même si c'est vide
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.person_search, size: 80, color: Colors.grey.shade300),
-            const SizedBox(height: 16),
-            const Text("Aucun agent enregistré dans cette structure", style: TextStyle(fontSize: 16, color: Colors.grey)),
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: _fetchUsers,
-              icon: const Icon(Icons.refresh, color: Colors.orange),
-              label: const Text("Actualiser", style: TextStyle(color: Colors.orange)),
-            )
-          ],
-        ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.person_search, size: 80, color: Colors.grey.shade300),
+          const SizedBox(height: 16),
+          const Text("Aucun agent trouvé", style: TextStyle(color: Colors.grey)),
+        ],
       ),
     );
   }

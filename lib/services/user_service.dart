@@ -270,4 +270,19 @@ class UserService {
       return false;
     }
   }
+
+  Future<void> disableUser(String userId) async {
+    final url = Uri.parse('$baseUrl/user/disable/$userId');
+    debugPrint("🚀 Tentative d'appel à l'URL : $url"); // 👈 AJOUTEZ CECI
+    try {
+      final response = await http.patch(url); // Assurez-vous que c'est PATCH
+      if (response.statusCode == 204) {
+        debugPrint("✅ Utilisateur désactivé avec succès");
+      } else {
+        debugPrint("❌ Erreur serveur (${response.statusCode}) : ${response.body}");
+      }
+    } catch (e) {
+      debugPrint("❌ Exception : $e");
+    }
+  }
 }
