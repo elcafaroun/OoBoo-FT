@@ -134,27 +134,46 @@ class CommandService {
   }
 
   /// Règlement d'un crédit client
+
+
+  /// Règlement d'un crédit client (Mode Hybride : Serveur + File d'attente locale)
+  ///
+  ///
   Future<bool> settleCredit(String commandId, double amountPaid, String paymentMethod) async {
-    // Si pas de réseau ou serveur arrêté, on bloque l'action ou on renvoie false
-    // (Ajustez selon votre logique métier si vous voulez créer une file d'attente pour les crédits)
-    if (!(await NetworkChecker.isBackendAccessible())) {
-      if (kDebugMode) print("📡 Impossible de régler le crédit : Serveur hors-ligne.");
-      return false;
+    bool serverIsUp = await NetworkChecker.isBackendAccessible();
+    bool onlineSuccess = false;
+
+    // 1. Tenter l'appel serveur
+    if (serverIsUp) {
+      try {
+        final response = await http.put(
+          Uri.parse('$baseUrl/command/settle/$commandId'),
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "amountPaid": amountPaid,
+            "paymentMethod": paymentMethod
+          }),
+        ).timeout(const Duration(seconds: 5));
+
+        onlineSuccess = (response.statusCode == 200);
+        if (onlineSuccess) return true;
+      } catch (e) {
+        if (kDebugMode) print("❌ Erreur de connexion au serveur : $e");
+      }
     }
 
-    try {
-      final response = await http.put(
-        Uri.parse('$baseUrl/command/settle/$commandId'),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "amountPaid": amountPaid,
-          "paymentMethod": paymentMethod
-        }),
-      ).timeout(const Duration(seconds: 5));
-      return response.statusCode == 200;
-    } catch (e) {
-      if (kDebugMode) print("❌ Erreur settleCredit : $e");
-      return false;
+    // 2. Si échec ou serveur DOWN, on enregistre en local pour synchroniser plus tard
+    if (!onlineSuccess) {
+      if (kDebugMode) print("💾 Serveur injoignable, sauvegarde locale...");
+      await _dbHelper.addToSyncQueue(
+          'UPDATE',
+          'commands',
+          commandId,
+          {'amountPaid': amountPaid, 'paymentMethod': paymentMethod, 'status': 'SETTLED'}
+      );
+      return true; // On retourne true pour que l'interface confirme l'action
     }
+
+    return false;
   }
 }

@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import 'package:printing/printing.dart';
 import '../services/command_service.dart';
 
@@ -30,8 +29,143 @@ class _OrdersScreenState extends State<OrdersScreen> {
     _searchController.addListener(_applyFilters);
   }
 
+  // --- IMPRESSION PRO (Design original + liste produits + QR + méthode de paiement) ---
+// --- IMPRESSION CORRIGÉE AVEC LES CLÉS DE VOTRE JSON ---
+  Future<void> _printReceipt(dynamic order, double amount, String method) async {
+    final pdf = pw.Document();
+    final orderId = order['id']?.toString() ?? "N/A";
+    final List<dynamic> items = order['items'] ?? [];
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a6,
+        build: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Center(child: pw.Text("REÇU DE PAIEMENT", style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold))),
+              pw.Divider(),
+              pw.Text("Client : ${order['customerName'] ?? 'Inconnu'}"),
+              pw.Text("Date : ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}"),
+              pw.Text("Mode : $method"),
+              pw.Divider(),
+              // Liste des produits avec les bonnes clés JSON
+              ...items.map((item) => pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text("${item['productName'] ?? 'Produit'} (x${item['quantity'] ?? 1})"),
+                  pw.Text("${(item['subTotal'] ?? 0).toStringAsFixed(0)} FCFA"),
+                ],
+              )),
+              pw.Divider(),
+              pw.Text("Total réglé : ${amount.toStringAsFixed(0)} FCFA", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 10),
+              pw.Center(
+                child: pw.BarcodeWidget(
+                  barcode: pw.Barcode.qrCode(),
+                  data: orderId,
+                  width: 60,
+                  height: 60,
+                ),
+              ),
+              pw.Text("Merci pour votre confiance", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+
+            ],
+          );
+        },
+      ),
+    );
+    await Printing.layoutPdf(onLayout: (PdfPageFormat format) async => pdf.save());
+  }
+  Future<void> _cancelOrder(dynamic order) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? profile = prefs.getString('userProfile');
+
+    if (profile != 'Super admin' && profile != 'Administrateur') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Accès refusé."), backgroundColor: Colors.red));
+      return;
+    }
+
+    bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Confirmation"),
+        content: Text("Annuler la commande de ${order['customerName'] ?? 'ce client'} ?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Non")),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Oui")),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _commandService.cancelOrder(order['id']);
+      if (mounted) {
+        await _fetchOrders();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Commande annulée !"), backgroundColor: Colors.green));
+      }
+    }
+  }
+
+  Future<void> _showSettleDialog(dynamic order) async {
+    final rawAmount = order['totalCredit'];
+    final double maxAmount = (rawAmount is num) ? rawAmount.toDouble() : 0.0;
+
+    final TextEditingController amountController = TextEditingController(text: maxAmount.toString());
+    String selectedPaymentMethod = "Espèces";
+    final List<String> paymentMethods = ["Espèces", "Mobile Money", "Chèque", "Virement"];
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text("Régler le crédit"),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text("Total dû : $maxAmount FCFA"),
+            const SizedBox(height: 15),
+            TextField(
+              controller: amountController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: "Montant à régler", border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 15),
+            DropdownButtonFormField<String>(
+              value: selectedPaymentMethod,
+              decoration: const InputDecoration(labelText: "Mode de paiement", border: OutlineInputBorder()),
+              items: paymentMethods.map((method) => DropdownMenuItem(value: method, child: Text(method))).toList(),
+              onChanged: (value) => setDialogState(() => selectedPaymentMethod = value!),
+            ),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
+            ElevatedButton(onPressed: () async {
+              final String textInput = amountController.text.replaceAll(',', '.');
+              double? amount = double.tryParse(textInput);
+
+              if (amount != null && amount > 0 && amount <= (maxAmount + 0.05)) {
+                Navigator.pop(context);
+                bool success = await _commandService.settleCredit(order['id'], amount, selectedPaymentMethod);
+                if (mounted) {
+                  if (success) {
+                    await _printReceipt(order, amount, selectedPaymentMethod);
+                    await _fetchOrders();
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Crédit réglé et reçu généré !"), backgroundColor: Colors.green));
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erreur de paiement"), backgroundColor: Colors.red));
+                  }
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Montant invalide !"), backgroundColor: Colors.red));
+              }
+            }, child: const Text("Valider")),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _fetchOrders() async {
-    setState(() => isLoading = true);
     final prefs = await SharedPreferences.getInstance();
     final structureId = prefs.getString('selected_structure_id') ?? "";
     if (structureId.isNotEmpty) {
@@ -49,32 +183,18 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 
   void _applyFilters() {
-    final query = _searchController.text.toLowerCase();
     setState(() {
       filteredOrders = allOrders.where((order) {
+        final query = _searchController.text.toLowerCase();
         final name = (order['customerName'] ?? '').toString().toLowerCase();
-        final matchesSearch = name.contains(query);
+        bool matchesSearch = name.contains(query);
         bool matchesDate = selectedDate == null ||
-            DateFormat('yyyy-MM-dd').format(DateTime.parse(order['orderDate'])) ==
-                DateFormat('yyyy-MM-dd').format(selectedDate!);
-        final status = (order['status'] ?? 'PENDING').toString().toUpperCase();
+            DateFormat('yyyy-MM-dd').format(DateTime.parse(order['orderDate'])) == DateFormat('yyyy-MM-dd').format(selectedDate!);
+        String status = (order['status'] ?? 'PENDING').toString().toUpperCase();
         bool matchesStatus = activeFilter == "TOUS" || status == activeFilter;
         return matchesSearch && matchesDate && matchesStatus;
       }).toList();
     });
-  }
-
-  Future<pw.Document> _generatePdf(dynamic order) async {
-    final pdf = pw.Document();
-    pdf.addPage(pw.Page(pageFormat: PdfPageFormat.a6, build: (pw.Context context) => pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Text("FACTURE: ${order['customerName']}", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          pw.Divider(),
-          pw.Text("Total : ${order['totalAmount']} FCFA"),
-        ]
-    )));
-    return pdf;
   }
 
   @override
@@ -109,10 +229,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       child: Column(
         children: [
           Row(children: [
-            Expanded(child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(hintText: "Rechercher...", prefixIcon: const Icon(Icons.search), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade100),
-            )),
+            Expanded(child: TextField(controller: _searchController, decoration: InputDecoration(hintText: "Rechercher...", prefixIcon: const Icon(Icons.search), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade100))),
             const SizedBox(width: 8),
             IconButton.filled(onPressed: () async {
               DateTime? picked = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2022), lastDate: DateTime(2030));
@@ -120,31 +237,34 @@ class _OrdersScreenState extends State<OrdersScreen> {
             }, icon: const Icon(Icons.calendar_month), style: IconButton.styleFrom(backgroundColor: Colors.orange))
           ]),
           const SizedBox(height: 12),
-          Row(children: ["TOUS", "COMPLETED", "PENDING"].map((f) => Expanded(
-            child: GestureDetector(
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: ["TOUS", "COMPLETED", "PENDING", "CANCELLED"].map((f) => GestureDetector(
               onTap: () { setState(() => activeFilter = f); _applyFilters(); },
               child: Container(
                 margin: const EdgeInsets.symmetric(horizontal: 4),
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                 decoration: BoxDecoration(color: activeFilter == f ? Colors.orange : Colors.grey.shade200, borderRadius: BorderRadius.circular(8)),
-                child: Center(child: Text(f, style: TextStyle(color: activeFilter == f ? Colors.white : Colors.grey.shade700, fontWeight: FontWeight.bold))),
+                child: Text(f, style: TextStyle(color: activeFilter == f ? Colors.white : Colors.grey.shade700, fontWeight: FontWeight.bold)),
               ),
-            ),
-          )).toList())
+            )).toList()),
+          )
         ],
       ),
     );
   }
 
   Widget _buildOrderTile(dynamic order) {
-    bool isPending = order['status'] == 'PENDING';
+    String status = (order['status'] ?? 'PENDING').toString().toUpperCase();
+    bool isCancelled = status == 'CANCELLED';
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade100)),
       child: Column(
         children: [
           Row(children: [
-            Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: isPending ? Colors.orange.shade50 : Colors.green.shade50, borderRadius: BorderRadius.circular(12)), child: Icon(Icons.receipt_long, color: isPending ? Colors.orange : Colors.green)),
+            Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: status == 'PENDING' ? Colors.orange.shade50 : isCancelled ? Colors.red.shade50 : Colors.green.shade50, borderRadius: BorderRadius.circular(12)), child: Icon(Icons.receipt_long, color: status == 'PENDING' ? Colors.orange : isCancelled ? Colors.red : Colors.green)),
             const SizedBox(width: 12),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(order['customerName'] ?? "Inconnu", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
@@ -153,25 +273,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
             Text("${order['totalAmount']} FCFA", style: const TextStyle(fontWeight: FontWeight.w900))
           ]),
           const Divider(height: 24),
-          Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                    onPressed: () async {
-                      final doc = await _generatePdf(order);
-                      await Printing.layoutPdf(onLayout: (f) => doc.save());
-                    },
-                    icon: const Icon(Icons.print, size: 16),
-                    label: const Text("Imprimer")
-                ),
-                if(isPending) ...[
-                  FilledButton(onPressed: () {}, style: FilledButton.styleFrom(backgroundColor: Colors.green), child: const Text("Payer")),
-                  FilledButton(onPressed: () {}, style: FilledButton.styleFrom(backgroundColor: Colors.red), child: const Text("Annuler")),
-                ]
-              ]
-          )
+          Wrap(alignment: WrapAlignment.end, spacing: 8, runSpacing: 8, children: [
+            OutlinedButton.icon(onPressed: () async {
+              await _printReceipt(order, (order['totalAmount'] ?? 0).toDouble(), order['paymentMethod']);
+            }, icon: const Icon(Icons.print, size: 16), label: const Text("Imprimer")),
+            if (status != 'COMPLETED' && status != 'CANCELLED')
+              FilledButton.icon(onPressed: () => _showSettleDialog(order), style: FilledButton.styleFrom(backgroundColor: Colors.blue), icon: const Icon(Icons.attach_money, size: 16), label: const Text("Régler")),
+            if(!isCancelled)
+              FilledButton(onPressed: () => _cancelOrder(order), style: FilledButton.styleFrom(backgroundColor: Colors.red), child: const Text("Annuler")),
+          ])
         ],
       ),
     );
