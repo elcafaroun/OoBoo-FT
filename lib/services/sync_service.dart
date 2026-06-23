@@ -4,42 +4,34 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import '../utils/constants.dart';
 import 'database/database_helper.dart';
-import 'network_checker.dart'; // 👈 IMPORT DU CHECKER GLOBAL
+import 'network_checker.dart';
 
 class SyncService {
   final DatabaseHelper _dbHelper = DatabaseHelper();
-
   // Endpoints
   final String _commandUrl = "$baseUrl/command";
   final String _stockUrl = "$baseUrl/update-stock";
   final String _productUrl = "$baseUrl/product";
   final String _categoryUrl = "$baseUrl/category";
   final String _structureUrl = "$baseUrl/structure";
-
-  /// Cycle complet : Pousse les modifs locales puis télécharge les données globales
+  final String _userUrl = "$baseUrl/user";
+  // Cycle complet : Pousse les modifs locales puis télécharge les données globales
   Future<void> fullSynchronization(String codeStructure, String userId) async {
-    // 1. VRAIE vérification de la disponibilité des micro-services
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
 
     if (!serverIsUp) {
-      debugPrint("📡 Micro-services indisponibles. Synchronisation annulée pour le moment.");
+      debugPrint("📡 Micro-services indisponibles. Synchronisation annulée.");
       return;
     }
 
-    debugPrint("🔄 Début de la synchronisation bidirectionnelle en ligne...");
-
-    // 2. Envoi des données locales (Push)
+    debugPrint("🔄 Début de la synchronisation bidirectionnelle...");
     await processQueue();
-
-    // 3. Récupération des données serveurs (Pull)
-    await refreshLocalData(codeStructure, userId);
-
-    debugPrint("✅ Synchronisation terminée avec succès.");
+    await refreshLocalData(userId);
+    debugPrint("✅ Synchronisation terminée.");
   }
 
   /// Pousse les actions en attente vers le serveur
   Future<void> processQueue() async {
-    // Double vérification par sécurité avant d'attaquer la file
     if (!(await NetworkChecker.isBackendAccessible())) return;
 
     final db = await _dbHelper.database;
@@ -52,6 +44,8 @@ class SyncService {
 
     if (queue.isEmpty) return;
 
+    debugPrint("📋 File d'attente : ${queue.length} tâches en attente.");
+
     for (var task in queue) {
       int taskId = task['id'];
       String tableName = task['tableName'];
@@ -61,19 +55,25 @@ class SyncService {
 
       bool success = false;
 
-      // Gestion des Commandes
-      if (tableName == 'commands') {
+      debugPrint("➡️ Traitement tâche : $action sur $tableName (ID: $entityId)");
+
+      // 1. Gestion des mots de passe
+      if (action == 'UPDATE_PASSWORD') {
+        success = await _sendPasswordUpdateToServer(entityId, data);
+      }
+      // 2. Gestion des Commandes
+      else if (tableName == 'commands') {
         if (action == 'INSERT') {
           success = await _sendOrderToServer(data);
         } else if (action == 'UPDATE' && data['status'] == 'CANCELLED') {
           success = await _sendCancelToServer(entityId);
         }
       }
-      // Gestion des Stocks
+      // 3. Gestion des Stocks
       else if (action == 'UPDATE_STOCK') {
         success = await _sendStockUpdateToServer(data);
       }
-      // Gestion des Structures
+      // 4. Gestion des Structures
       else if (tableName == 'structures' && action == 'UPDATE') {
         success = await _sendStructureUpdateToServer(entityId, data);
       }
@@ -83,81 +83,139 @@ class SyncService {
         if (tableName == 'commands') {
           await db.update('commands', {'isSynced': 1}, where: 'id = ?', whereArgs: [entityId]);
         }
+        debugPrint("✅ Tâche $taskId réussie et supprimée.");
       } else {
-        // Si une requête échoue au milieu de la boucle (ex: micro-coupure réseau),
-        // on arrête le traitement de la file pour éviter de bloquer l'application sur les tâches suivantes.
-        debugPrint("⚠️ Interruption de la file d'attente : Échec de la tâche ID $taskId");
-        break;
+        debugPrint("⚠️ Échec tâche ID $taskId. Passage à la suivante.");
+        continue; // On continue vers la prochaine tâche même si celle-ci échoue
       }
     }
   }
 
-  /// Télécharge les dernières données (Produits, Catégories, Commandes, Structures)
-  Future<void> refreshLocalData(String codeStructure, String userId) async {
-    // Triple vérification (utile si appelée indépendamment de fullSynchronization)
-    if (!(await NetworkChecker.isBackendAccessible())) return;
+  // Ajoutez cette variable dans votre classe SyncService
+  // Ajoutez cette variable dans votre classe SyncService
+  bool _isSyncing = false;
 
+  Future<void> refreshLocalData(String userId) async {
+    // 1. Protection contre les appels multiples
+    if (_isSyncing) {
+      debugPrint("⚠️ Synchro déjà en cours, annulation du doublon.");
+      return;
+    }
+
+    if (!(await NetworkChecker.isBackendAccessible())) {
+      debugPrint("📡 Mode hors-ligne : synchro annulée.");
+      return;
+    }
+
+    _isSyncing = true; // Verrouillage
     try {
+      debugPrint("📥 Début de la synchronisation hiérarchique...");
       final headers = {'Content-Type': 'application/json'};
 
-      debugPrint("📥 Téléchargement des dernières données depuis le serveur...");
+      final structUri = Uri.parse("$_structureUrl/user/$userId");
+      final linkUri = Uri.parse("$_userUrl/user-structures/$userId");
 
-      // Récupération parallèle optimisée
       final responses = await Future.wait([
-        http.get(Uri.parse("$_productUrl/structure/$codeStructure"), headers: headers),
-        http.get(Uri.parse("$_categoryUrl/structure/$codeStructure"), headers: headers),
-        http.get(Uri.parse("$_commandUrl/structure/$codeStructure"), headers: headers),
-        http.get(Uri.parse("$_structureUrl/user/$userId"), headers: headers),
-      ]).timeout(const Duration(seconds: 15)); // Timeout réduit à 15s car le checker valide l'accès en amont
+        http.get(structUri, headers: headers),
+        http.get(linkUri, headers: headers),
+      ]);
 
-      // 1. Produits
+      // 2. Traitement des Structures
       if (responses[0].statusCode == 200) {
-        await _dbHelper.syncProductsLocal(jsonDecode(utf8.decode(responses[0].bodyBytes)));
+        List<dynamic> structures = jsonDecode(utf8.decode(responses[0].bodyBytes));
+        await _dbHelper.syncStructuresLocal(structures);
+        debugPrint("🏢 ${structures.length} structures enregistrées.");
+
+        // 3. Traitement des Relations (User <-> Structures)
+        // Remplacez votre bloc de traitement des relations (Point 3 dans votre code) par ceci :
+        if (responses[1].statusCode == 200) {
+          List<dynamic> rawData = jsonDecode(utf8.decode(responses[1].bodyBytes));
+
+          List<Map<String, dynamic>> processedList = rawData.map((item) {
+            return {
+              'id': item['id']?.toString() ?? DateTime.now().microsecondsSinceEpoch.toString(),
+              'user_id': (item['userId'] ?? item['user_id'] ?? item['id_user'] ?? userId).toString(),
+              'structure_id': (item['structureId'] ?? item['structure_id'] ?? item['id_structure'] ?? item['idStructure']).toString(),
+              'role_in_structure': (item['roleInStructure'] ?? item['role_in_structure'] ?? 'COLLABORATEUR').toString(),
+              'updated_at': (item['updatedAt'] ?? item['updated_at'] ?? DateTime.now().toIso8601String()).toString(),
+            };
+          }).toList();
+
+          // APPEL CRITIQUE : Assurez-vous que cette fonction ne contient AUCUN 'DELETE'
+          await _dbHelper.syncUserStructuresLocal(processedList);
+        }
+
+        // 4. Synchronisation des dépendances (Produits/Catégories/Commandes)
+        for (var structure in structures) {
+          String? code = structure['codeStructure']?.toString();
+          if (code == null || code.isEmpty) continue;
+
+          debugPrint("🔄 Synchronisation des données pour la structure : $code");
+
+          try {
+            // 1. Synchronisation séquentielle pour respecter les dépendances (Catégorie -> Produit)
+
+            // A. Catégories d'abord
+            final catResp = await http.get(Uri.parse("$_categoryUrl/structure/$code"), headers: headers);
+            if (catResp.statusCode == 200) {
+              await _dbHelper.syncCategoriesLocal(jsonDecode(utf8.decode(catResp.bodyBytes)));
+              debugPrint("✅ Catégories synchronisées pour $code");
+            }
+
+            // B. Produits ensuite
+            final prodResp = await http.get(Uri.parse("$_productUrl/structure/$code"), headers: headers);
+            if (prodResp.statusCode == 200) {
+              await _dbHelper.syncProductsLocal(jsonDecode(utf8.decode(prodResp.bodyBytes)));
+              debugPrint("✅ Produits synchronisés pour $code");
+            }
+
+            // C. Commandes en dernier
+            final cmdResp = await http.get(Uri.parse("$_commandUrl/structure/$code"), headers: headers);
+            if (cmdResp.statusCode == 200) {
+              await _dbHelper.syncCommandsLocal(jsonDecode(utf8.decode(cmdResp.bodyBytes)));
+              debugPrint("✅ Commandes synchronisées pour $code");
+            }
+
+          } catch (e) {
+            debugPrint("⚠️ Erreur lors de la synchronisation de la structure $code : $e");
+            // La boucle continue automatiquement pour la structure suivante
+          }
+        }
       }
 
-      // 2. Catégories
-      if (responses[1].statusCode == 200) {
-        await _dbHelper.syncCategoriesLocal(jsonDecode(utf8.decode(responses[1].bodyBytes)));
-      }
-
-      // 3. Commandes
-      if (responses[2].statusCode == 200) {
-        await _dbHelper.syncCommandsLocal(jsonDecode(utf8.decode(responses[2].bodyBytes)));
-      }
-
-      // 4. Structures
-      if (responses[3].statusCode == 200) {
-        final List<dynamic> userStructures = jsonDecode(utf8.decode(responses[3].bodyBytes));
-        await _dbHelper.syncStructuresLocal(userStructures);
-        debugPrint("🏢 Structures mises à jour pour l'utilisateur $userId");
-      }
-
-      debugPrint("📥 Cache local entièrement rafraîchi.");
-    } catch (e) {
-      debugPrint("❌ Erreur lors du rafraîchissement des données : $e");
+      debugPrint("✅ Cache local rafraîchi avec succès.");
+    } catch (e, stackTrace) {
+      debugPrint("❌ Erreur critique : $e");
+      debugPrint("📜 Trace : $stackTrace");
+    } finally {
+      _isSyncing = false; // Libération du verrou
     }
   }
 
-  // --- Méthodes API ---
-
-  Future<bool> _sendOrderToServer(Map<String, dynamic> data) async {
+  Future<bool> _sendPasswordUpdateToServer(String userId, Map<String, dynamic> data) async {
     try {
-      final response = await http.post(
-        Uri.parse(_commandUrl),
+      final response = await http.patch(
+        Uri.parse('$baseUrl/user/reset-password/$userId'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(data),
       ).timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint("❌ Erreur API Mot de passe : $e");
+      return false;
+    }
+  }
+
+  Future<bool> _sendOrderToServer(Map<String, dynamic> data) async {
+    try {
+      final response = await http.post(Uri.parse(_commandUrl), headers: {'Content-Type': 'application/json'}, body: jsonEncode(data)).timeout(const Duration(seconds: 10));
       return response.statusCode == 201 || response.statusCode == 200;
     } catch (_) { return false; }
   }
 
   Future<bool> _sendStockUpdateToServer(Map<String, dynamic> data) async {
     try {
-      final response = await http.post(
-        Uri.parse(_stockUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(data),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http.post(Uri.parse(_stockUrl), headers: {'Content-Type': 'application/json'}, body: jsonEncode(data)).timeout(const Duration(seconds: 10));
       return response.statusCode == 200;
     } catch (_) { return false; }
   }
@@ -171,12 +229,10 @@ class SyncService {
 
   Future<bool> _sendStructureUpdateToServer(String id, Map<String, dynamic> data) async {
     try {
-      final response = await http.put(
-        Uri.parse("$_structureUrl/$id"),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(data),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http.put(Uri.parse("$_structureUrl/$id"), headers: {'Content-Type': 'application/json'}, body: jsonEncode(data)).timeout(const Duration(seconds: 10));
       return response.statusCode == 200;
     } catch (_) { return false; }
   }
+
+
 }

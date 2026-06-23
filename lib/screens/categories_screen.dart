@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/category_service.dart';
 import '../services/product_service.dart';
+import '../services/database/database_helper.dart'; // Import ajouté
 import '../providers/cart_provider.dart';
 import '../utils/constants.dart';
 import 'cart_screen.dart';
@@ -20,6 +21,7 @@ class CategoriesScreen extends StatefulWidget {
 class _CategoriesScreenState extends State<CategoriesScreen> {
   final CategoryService _categoryService = CategoryService();
   final ProductService _productService = ProductService();
+  final DatabaseHelper _dbHelper = DatabaseHelper(); // Instance ajoutée
   final TextEditingController _searchController = TextEditingController();
 
   List<dynamic> categories = [];
@@ -45,30 +47,44 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   Future<void> _loadData() async {
     setState(() => isLoading = true);
     try {
-      final cats = await _categoryService.getCategoriesByStructure(widget.structureId);
-      final prods = await _productService.getProductsByStructure(widget.structureId);
+      List<dynamic> cats = [];
+      List<dynamic> prods = [];
 
-      // Filtrage : On ne garde que les éléments où 'active' ou 'isActive' est true
-      // Si le champ est null, on considère qu'il est true (actif) par défaut
-      final activeCategories = (cats as List).where((c) {
+      // 1. Tentative de récupération API avec gestion d'erreur robuste
+      try {
+        cats = await _categoryService.getCategoriesByStructure(widget.structureId);
+        prods = await _productService.getProductsByStructure(widget.structureId);
+
+        // Synchronisation locale automatique pour les prochains accès hors ligne
+        await _dbHelper.syncCategoriesLocal(cats);
+        await _dbHelper.syncProductsLocal(prods);
+      } catch (e) {
+        debugPrint("🌐 Mode hors ligne : chargement depuis SQLite");
+        // 2. Fallback sur le local si l'API est injoignable
+        cats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
+        prods = await _dbHelper.getProductsByStructureLocal(widget.structureId);
+      }
+
+      // Filtrage des éléments actifs
+      final activeCategories = (cats).where((c) {
         final status = c['active'] ?? c['isActive'] ?? true;
-        return status == true;
+        return status == true || status.toString() == '1' || status.toString().toLowerCase() == 'true';
       }).toList();
 
-      final activeProducts = (prods as List).where((p) {
+      final activeProducts = (prods).where((p) {
         final status = p['active'] ?? p['isActive'] ?? true;
-        return status == true;
+        return status == true || status.toString() == '1' || status.toString().toLowerCase() == 'true';
       }).toList();
 
       setState(() {
         categories = activeCategories;
         allProducts = activeProducts;
-        filteredProducts = activeProducts; // Initialisation de la vue filtrée
+        filteredProducts = activeProducts;
         isLoading = false;
       });
     } catch (e) {
       setState(() => isLoading = false);
-      debugPrint("Erreur chargement : $e");
+      debugPrint("❌ Erreur critique chargement : $e");
     }
   }
 
@@ -87,7 +103,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF9F7F2), // Fond crème léger
+      backgroundColor: const Color(0xFFF9F7F2),
       appBar: AppBar(
         title: Text(widget.structureName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.white,
@@ -281,7 +297,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                         height: 55,
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange, // <-- Bouton Orange
+                              backgroundColor: Colors.orange,
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))
                           ),
                           onPressed: () {
