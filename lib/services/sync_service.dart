@@ -122,12 +122,32 @@ class SyncService {
 
       // 2. Traitement des Structures
       if (responses[0].statusCode == 200) {
-        List<dynamic> structures = jsonDecode(utf8.decode(responses[0].bodyBytes));
-        await _dbHelper.syncStructuresLocal(structures);
-        debugPrint("🏢 ${structures.length} structures enregistrées.");
+        final dynamic decodedData = jsonDecode(utf8.decode(responses[0].bodyBytes));
+
+        // 🔬 LOG DE SÉCURITÉ : Afficher ce que le serveur renvoie réellement
+        debugPrint("👉 Réponse brute API structures : $decodedData");
+
+        List<dynamic> structures = [];
+
+        // Sécurité si l'API renvoie un objet avec une clé 'content' ou 'data'
+        if (decodedData is List) {
+          structures = decodedData;
+        } else if (decodedData is Map && decodedData.containsKey('structures')) {
+          structures = decodedData['structures'];
+        } else if (decodedData is Map && decodedData.containsKey('data')) {
+          structures = decodedData['data'];
+        } else if (decodedData is Map) {
+          // Si c'est un seul objet, on l'encapsule dans une liste
+          structures = [decodedData];
+        }
+
+        debugPrint("🏢 Nombre de structures détectées à traiter : ${structures.length}");
+
+        if (structures.isNotEmpty) {
+          await _dbHelper.syncStructuresLocal(structures);
+        }
 
         // 3. Traitement des Relations (User <-> Structures)
-        // Remplacez votre bloc de traitement des relations (Point 3 dans votre code) par ceci :
         if (responses[1].statusCode == 200) {
           List<dynamic> rawData = jsonDecode(utf8.decode(responses[1].bodyBytes));
 
@@ -141,20 +161,24 @@ class SyncService {
             };
           }).toList();
 
-          // APPEL CRITIQUE : Assurez-vous que cette fonction ne contient AUCUN 'DELETE'
           await _dbHelper.syncUserStructuresLocal(processedList);
         }
 
         // 4. Synchronisation des dépendances (Produits/Catégories/Commandes)
         for (var structure in structures) {
-          String? code = structure['codeStructure']?.toString();
-          if (code == null || code.isEmpty) continue;
+          // 🛠️ MULTI-MAPPING DES CLÉS : s'adapte à 'id', 'codeStructure' ou 'structureId'
+          String? code = structure['idStructure']?.toString() ??
+              structure['codeStructure']?.toString() ??
+              structure['structureId']?.toString();
 
-          debugPrint("🔄 Synchronisation des données pour la structure : $code");
+          if (code == null || code.isEmpty) {
+            debugPrint("⚠️ Structure ignorée car aucun ID ou code valide n'a été trouvé : $structure");
+            continue;
+          }
+
+          debugPrint("🔄 Synchronisation pour la structure : $code");
 
           try {
-            // 1. Synchronisation séquentielle pour respecter les dépendances (Catégorie -> Produit)
-
             // A. Catégories d'abord
             final catResp = await http.get(Uri.parse("$_categoryUrl/structure/$code"), headers: headers);
             if (catResp.statusCode == 200) {
@@ -178,12 +202,13 @@ class SyncService {
 
           } catch (e) {
             debugPrint("⚠️ Erreur lors de la synchronisation de la structure $code : $e");
-            // La boucle continue automatiquement pour la structure suivante
           }
         }
+      } else {
+        debugPrint("❌ Code d'erreur API structures : ${responses[0].statusCode}");
       }
 
-      debugPrint("✅ Cache local rafraîchi avec succès.");
+      debugPrint("✅ Cache local rafraîchi.");
     } catch (e, stackTrace) {
       debugPrint("❌ Erreur critique : $e");
       debugPrint("📜 Trace : $stackTrace");

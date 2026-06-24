@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:fada/services/network_checker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
@@ -32,7 +33,6 @@ class _OrdersScreenState extends State<OrdersScreen> {
     _searchController.addListener(_applyFilters);
   }
 
-  // --- LOGIQUE OFFLINE-FIRST ---
   Future<void> _fetchOrders() async {
     final prefs = await SharedPreferences.getInstance();
     final structureId = prefs.getString('selected_structure_id') ?? "";
@@ -42,28 +42,33 @@ class _OrdersScreenState extends State<OrdersScreen> {
       return;
     }
 
-    try {
-      // 1. Tenter la mise à jour via API
+    // 1. CHARGEMENT LOCAL IMMEDIAT (Source de vérité)
+    final localData = await _dbHelper.getLocalCommands(structureId);
+    if (mounted) {
+      setState(() {
+        allOrders = localData;
+        _applyFilters(); // Applique le filtre immédiatement
+        isLoading = false;
+      });
+    }
+
+    // 2. SYNCHRONISATION EN ARRIÈRE-PLAN
+    if (await NetworkChecker.isBackendAccessible()) {
       try {
-        final data = await _commandService.getCommandsByStructure(structureId);
-        await _dbHelper.syncCommandsLocal(data);
+        final remoteData = await _commandService.getCommandsByStructure(structureId);
+        await _dbHelper.syncCommandsLocal(remoteData);
+
+        // Rafraîchir avec les données fraîches si nécessaire
+        final updatedLocalData = await _dbHelper.getLocalCommands(structureId);
+        if (mounted) {
+          setState(() {
+            allOrders = updatedLocalData;
+            _applyFilters();
+          });
+        }
       } catch (e) {
-        debugPrint("🌐 Mode hors ligne : lecture locale uniquement");
+        debugPrint("⚠️ Synchro API échouée, maintien du cache : $e");
       }
-
-      // 2. Lire depuis la base locale (Source de vérité)
-      final localData = await _dbHelper.getLocalCommands(structureId);
-
-      if (mounted) {
-        setState(() {
-          allOrders = localData;
-          _applyFilters();
-          isLoading = false;
-        });
-      }
-    } catch (e) {
-      debugPrint("❌ Erreur chargement : $e");
-      if (mounted) setState(() => isLoading = false);
     }
   }
 

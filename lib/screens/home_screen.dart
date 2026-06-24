@@ -2,6 +2,7 @@ import 'package:fada/services/database/database_helper.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart';
 import '../services/network_checker.dart';
 import 'structures_screen.dart';
 import 'login_screen.dart';
@@ -38,16 +39,20 @@ class _HomeScreenState extends State<HomeScreen> {
       await _loadUserProfile();
 
       if (_userId != null && _userId!.isNotEmpty) {
-        bool isServerOnline = await NetworkChecker.isBackendAccessible();
-        if (isServerOnline) {
-          debugPrint("🚀 Démarrage de la synchronisation...");
-          // 1. On attend que TOUTE la synchro soit finie
+        // 1. Sync avec le serveur
+        if (await NetworkChecker.isBackendAccessible()) {
           await _syncService.fullSynchronization(_codeStructure ?? "", _userId!);
+        }
 
-          // 2. CRUCIAL : Forcez la mise à jour des compteurs/états
-          // après la synchro pour que l'UI soit à jour
-          await _refreshPendingCount();
-          debugPrint("✅ Synchro terminée et état UI rafraîchi.");
+        // 2. LOG CRITIQUE : Vérification que les données sont là
+        final db = await _dbHelper.database;
+        final catCount = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM categories"));
+        final prodCount = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM products"));
+
+        debugPrint("🔍 [DB CHECK] Catégories trouvées : $catCount, Produits trouvés : $prodCount");
+
+        if (catCount == 0) {
+          debugPrint("⚠️ ALERTE : La base est vide après synchro !");
         }
       }
     } catch (e) {

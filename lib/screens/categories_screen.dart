@@ -1,3 +1,4 @@
+import 'package:fada/services/network_checker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/category_service.dart';
@@ -46,45 +47,42 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
   Future<void> _loadData() async {
     setState(() => isLoading = true);
-    try {
-      List<dynamic> cats = [];
-      List<dynamic> prods = [];
 
-      // 1. Tentative de récupération API avec gestion d'erreur robuste
+    // 1. CHARGEMENT LOCAL (Priorité absolue pour l'expérience utilisateur)
+    // On récupère ce qu'on a déjà dans la base SQLite, peu importe l'état du réseau.
+    final localCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
+    final localProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
+
+    // On affiche immédiatement les données locales
+    setState(() {
+      categories = localCats;
+      allProducts = localProds;
+      filteredProducts = localProds;
+      isLoading = false;
+    });
+
+    // 2. SYNCHRONISATION (En arrière-plan)
+    // On vérifie le réseau, et si on est en ligne, on demande au serveur de mettre à jour le cache
+    if (await NetworkChecker.isBackendAccessible()) {
       try {
-        cats = await _categoryService.getCategoriesByStructure(widget.structureId);
-        prods = await _productService.getProductsByStructure(widget.structureId);
+        final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId);
+        final remoteProds = await _productService.getProductsByStructure(widget.structureId);
 
-        // Synchronisation locale automatique pour les prochains accès hors ligne
-        await _dbHelper.syncCategoriesLocal(cats);
-        await _dbHelper.syncProductsLocal(prods);
+        // On met à jour SQLite avec les nouvelles données reçues
+        await _dbHelper.syncCategoriesLocal(remoteCats);
+        await _dbHelper.syncProductsLocal(remoteProds);
+
+        // On rafraîchit l'affichage avec les données fraîches du serveur
+        setState(() {
+          categories = remoteCats;
+          allProducts = remoteProds;
+          filteredProducts = remoteProds;
+        });
       } catch (e) {
-        debugPrint("🌐 Mode hors ligne : chargement depuis SQLite");
-        // 2. Fallback sur le local si l'API est injoignable
-        cats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
-        prods = await _dbHelper.getProductsByStructureLocal(widget.structureId);
+        debugPrint("⚠️ La synchro a échoué mais on garde le cache : $e");
       }
-
-      // Filtrage des éléments actifs
-      final activeCategories = (cats).where((c) {
-        final status = c['active'] ?? c['isActive'] ?? true;
-        return status == true || status.toString() == '1' || status.toString().toLowerCase() == 'true';
-      }).toList();
-
-      final activeProducts = (prods).where((p) {
-        final status = p['active'] ?? p['isActive'] ?? true;
-        return status == true || status.toString() == '1' || status.toString().toLowerCase() == 'true';
-      }).toList();
-
-      setState(() {
-        categories = activeCategories;
-        allProducts = activeProducts;
-        filteredProducts = activeProducts;
-        isLoading = false;
-      });
-    } catch (e) {
-      setState(() => isLoading = false);
-      debugPrint("❌ Erreur critique chargement : $e");
+    } else {
+      debugPrint("📡 Mode hors-ligne : utilisation du cache uniquement.");
     }
   }
 
