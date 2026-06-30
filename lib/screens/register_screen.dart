@@ -3,12 +3,13 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/user_service.dart';
+import '../services/network_checker.dart'; // ✅ Import de ton outil de vérification réseau intelligent
 
 class RegisterScreen extends StatefulWidget {
   final bool isFromLogin;
+
   const RegisterScreen({super.key, this.isFromLogin = false});
 
   @override
@@ -28,6 +29,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool obscurePassword = true;
   bool obscureConfirm = true;
 
+  // 🌐 États pour le contrôle de l'accès à l'API/Backend au démarrage
+  bool _isCheckingConnectivity = true;
+  bool _isOnline = false;
+
   final UserService userService = UserService();
 
   @override
@@ -36,6 +41,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (widget.isFromLogin) {
       userProfile = "Super admin";
     }
+    _checkInitialConnectivity();
+  }
+
+  /// 🔒 Appel de ton service NetworkChecker avant d'afficher le formulaire
+  Future<void> _checkInitialConnectivity() async {
+    setState(() {
+      _isCheckingConnectivity = true;
+    });
+
+    // ✅ Utilisation directe de ta méthode de Ping (Actuator)
+    final bool backendAccessible = await NetworkChecker.isBackendAccessible();
+
+    setState(() {
+      _isOnline = backendAccessible;
+      _isCheckingConnectivity = false;
+    });
   }
 
   String _generateRandomPin() {
@@ -137,11 +158,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> handleRegister() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final List<ConnectivityResult> connectivityResult = await (Connectivity().checkConnectivity());
-    if (connectivityResult.contains(ConnectivityResult.none)) {
+    // ✅ Double check réseau avec ton service juste avant de faire l'envoi
+    if (!await NetworkChecker.isBackendAccessible()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Pas de connexion internet pour l'initialisation ou l'affectation 🌐"),
+          content: Text("Le serveur est devenu injoignable ou votre connexion a coupé 🌐"),
           backgroundColor: Colors.red,
         ));
       }
@@ -154,12 +175,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final prefs = await SharedPreferences.getInstance();
       String? codeStructure = prefs.getString('codeStructure');
 
-      // Récupération intelligente et fallback si la structure par défaut est stockée différemment
       if (!widget.isFromLogin && (codeStructure == null || codeStructure.isEmpty)) {
         codeStructure = prefs.getString('selected_structure_id') ?? prefs.getString('current_structure_code');
       }
 
-      // Sécurité : Un collaborateur doit impérativement posséder un code structure d'affectation
       if (!widget.isFromLogin && (codeStructure == null || codeStructure.isEmpty)) {
         setState(() => isLoading = false);
         if (mounted) {
@@ -175,7 +194,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final targetPhone = phoneController.text.trim();
       final targetName = nameController.text.trim();
 
-      // 🔍 1. Vérification d'unicité de l'E-mail (si renseigné)
       if (targetEmail.isNotEmpty) {
         bool emailAvailable = await userService.checkEmailAvailable(targetEmail);
         if (!emailAvailable) {
@@ -189,7 +207,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         }
       }
 
-      // 🔍 2. Vérification d'unicité du Téléphone
       bool phoneAvailable = await userService.checkPhoneAvailable(targetPhone);
       if (!phoneAvailable) {
         setState(() => isLoading = false);
@@ -201,7 +218,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         return;
       }
 
-      // Définition ou génération du mot de passe (PIN)
       String finalPassword;
       if (widget.isFromLogin) {
         finalPassword = passwordController.text.trim();
@@ -209,7 +225,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         finalPassword = _generateRandomPin();
       }
 
-      // 📡 Envoi au service backend (Liaison via Query Parameter conforme)
       final success = await userService.registerUser(
         targetName,
         targetPhone,
@@ -230,7 +245,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ));
             Navigator.pop(context);
           } else {
-            // Ouvrir le BottomSheet d'options d'envoi (SMS / WhatsApp) pour les collaborateurs
             _showShareOptions(targetPhone, targetName, finalPassword);
           }
         }
@@ -255,6 +269,65 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ⏳ 1. Écran de chargement pendant l'analyse de l'API (Actuator health)
+    if (_isCheckingConnectivity) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(color: Colors.orange),
+        ),
+      );
+    }
+
+    // 🛑 2. Écran d'erreur bloquant si l'instance Spring Boot est injoignable
+    if (!_isOnline) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF9F7F2),
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.black),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ),
+        body: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(Icons.cloud_off_rounded, size: 80, color: Colors.orange),
+              const SizedBox(height: 24),
+              const Text(
+                "Serveur Central Injoignable",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF2D3142)),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                "L'application n'arrive pas à joindre les services de synchronisation réseau. L'enregistrement de nouveaux comptes est désactivé en mode hors-ligne pour préserver la cohérence des structures.",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, color: Colors.black54, height: 1.5),
+              ),
+              const SizedBox(height: 32),
+              ElevatedButton.icon(
+                onPressed: _checkInitialConnectivity,
+                icon: const Icon(Icons.sync_rounded, color: Colors.white),
+                label: const Text("TENTER UNE RECONNEXION", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  elevation: 0,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ✨ 3. Affichage du formulaire classique si le backend est accessible
     return Scaffold(
       backgroundColor: const Color(0xFFF9F7F2),
       appBar: AppBar(

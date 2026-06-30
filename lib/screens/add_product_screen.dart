@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:fada/screens/scanner_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,12 +26,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final _purchasePriceController = TextEditingController();
   final _productQteController = TextEditingController();
   final _stockAlertController = TextEditingController();
+  final _qrCodeController = TextEditingController(); // 👈 Nouveau contrôleur pour le Code QR
 
   // Focus et Validation Nom
   final FocusNode _nameFocusNode = FocusNode();
   String? _nameError;
   bool _isCheckingName = false;
-  bool _isNameValid = false; // Pour afficher le check vert
+  bool _isNameValid = false;
 
   // État de connexion
   bool _isOnline = true;
@@ -45,12 +47,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
     super.initState();
     _checkInitialConnectivity();
 
-    // 1. Écouter la connexion internet
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((results) {
       setState(() => _isOnline = !results.contains(ConnectivityResult.none));
     });
 
-    // 2. Écouter quand on quitte le champ NOM (perte de focus)
     _nameFocusNode.addListener(() {
       if (!_nameFocusNode.hasFocus && _nameController.text.isNotEmpty) {
         _validateProductName();
@@ -68,6 +68,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _purchasePriceController.dispose();
     _productQteController.dispose();
     _stockAlertController.dispose();
+    _qrCodeController.dispose(); // 👈 Nettoyage du contrôleur QR
     super.dispose();
   }
 
@@ -76,7 +77,42 @@ class _AddProductScreenState extends State<AddProductScreen> {
     setState(() => _isOnline = !result.contains(ConnectivityResult.none));
   }
 
-  /// 🔍 Vérification du nom unique via API
+  /// 🔍 Génération automatique d'un code unique basé sur le temps et la structure
+  void _generateAutomaticQrCode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String codeStructure = prefs.getString('selected_structure_id') ?? "PBM";
+    final int timestamp = DateTime.now().millisecondsSinceEpoch;
+
+    // Génère une structure propre : PBM-1719669518 (Exemple)
+    setState(() {
+      _qrCodeController.text = "${codeStructure.toUpperCase()}-$timestamp";
+    });
+  }
+
+  /// 📸 Fonction simulée ou reliée à ton module de scan de caméra
+  /// 📸 Ouvre l'écran de la caméra et récupère le code scanné
+  Future<void> _scanProductCode() async {
+    // Import du fichier fraîchement créé
+    final String? codeScanne = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (context) => const ScannerScreen()),
+    );
+
+    // Si l'utilisateur n'a pas fait un retour arrière vide, on assigne la valeur
+    if (codeScanne != null && codeScanne.isNotEmpty) {
+      setState(() {
+        _qrCodeController.text = codeScanne;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Code produit récupéré : $codeScanne ✅"),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
   Future<void> _validateProductName() async {
     if (!_isOnline) return;
 
@@ -102,7 +138,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           _isNameValid = false;
         } else {
           _nameError = null;
-          _isNameValid = true; // Déclenche l'affichage du check vert
+          _isNameValid = true;
         }
       });
     } catch (e) {
@@ -158,6 +194,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final data = {
       "productName": _nameController.text.trim(),
       "productDescription": _descriptionController.text.trim(),
+      "productQrCode": _qrCodeController.text.trim(), // 👈 Injection du code QR / Code-barres
       "productPrice": double.tryParse(_priceController.text.trim()) ?? 0.0,
       "prixAchat": double.tryParse(_purchasePriceController.text.trim()) ?? 0.0,
       "categoryId": widget.categoryId,
@@ -186,14 +223,14 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
-  InputDecoration _fieldStyle(String label, IconData icon, {bool checking = false, String? error, bool valid = false}) {
+  InputDecoration _fieldStyle(String label, IconData icon, {bool checking = false, String? error, bool valid = false, Widget? suffix}) {
     return InputDecoration(
       labelText: label,
       errorText: error,
       prefixIcon: Icon(icon, color: Colors.orange.shade700),
-      suffixIcon: checking
+      suffixIcon: suffix ?? (checking
           ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
-          : (valid ? const Icon(Icons.check_circle, color: Colors.green) : null),
+          : (valid ? const Icon(Icons.check_circle, color: Colors.green) : null)),
       filled: true,
       fillColor: Colors.white,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide(color: Colors.grey.shade300)),
@@ -243,6 +280,31 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     decoration: _fieldStyle("Nom du produit", Icons.shopping_bag, checking: _isCheckingName, error: _nameError, valid: _isNameValid),
                     validator: (v) => v!.isEmpty ? "Requis" : _nameError,
                     onChanged: (val) { if(_nameError != null) setState(() => _nameError = null); },
+                  ),
+                  const SizedBox(height: 15),
+
+                  // 🔐 Champ Code QR / Code-barres avec Double Action (Scanner ou Générer)
+                  TextFormField(
+                    controller: _qrCodeController,
+                    decoration: _fieldStyle(
+                      "Code QR / Code-barres (Optionnel)",
+                      Icons.qr_code_2_rounded,
+                      suffix: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.document_scanner_rounded, color: Colors.blue),
+                            tooltip: "Scanner un code",
+                            onPressed: _scanProductCode,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.autorenew_rounded, color: Colors.green),
+                            tooltip: "Générer un code",
+                            onPressed: _generateAutomaticQrCode,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 15),
 

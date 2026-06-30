@@ -28,20 +28,11 @@ class _LoginScreenState extends State<LoginScreen> {
   final UserService _userService = UserService();
   final StructureService _structureService = StructureService();
 
-  /// 🔹 Vérification de la destination (Home ou Subscription)
-  Future<void> _checkAndNavigate(String userId, String codeStructure, bool isOnline) async {
-    if (isOnline) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.orange)),
-      );
-    }
-
+  // ✅ OFFLINE-FIRST : Navigation rapide basée sur l'état local ou en ligne
+  Future<void> _checkAndNavigate(String userId, String codeStructure, bool isOnlineTarget) async {
     try {
       List<dynamic> structures;
-
-      if (isOnline) {
+      if (isOnlineTarget && await NetworkChecker.isBackendAccessible()) {
         structures = await _structureService.getStructuresByUser(userId);
         await DatabaseHelper().syncStructuresLocal(structures);
       } else {
@@ -49,108 +40,126 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       if (!mounted) return;
-      if (isOnline) Navigator.pop(context);
 
-      // Si aucune structure n'est associée, redirection vers l'écran d'abonnement / création
       if (structures.isEmpty && codeStructure.isEmpty) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const SubscriptionScreen()),
-        );
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const SubscriptionScreen()));
       } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const HomeScreen()),
-        );
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const HomeScreen()));
       }
     } catch (e) {
+      debugPrint('⚠️ Erreur de pré-chargement des structures (Bascule locale automatique) : $e');
       if (!mounted) return;
-      if (isOnline) Navigator.pop(context);
-      _showSnackBar('Erreur de vérification : $e', Colors.red);
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const HomeScreen()));
     }
   }
 
-  /// 🔹 Logique de connexion Hybride avec gestion du tableau de structures
+  // ✅ LE CŒUR DU OFFLINE-FIRST SÉCURISÉ
   void _login() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
 
-    try {
-      bool serverIsUp = await NetworkChecker.isBackendAccessible();
-      final String loginValue = _loginController.text.trim();
-      final String passwordValue = _passwordController.text.trim();
+    final String loginValue = _loginController.text.trim();
+    final String passwordValue = _passwordController.text.trim();
 
-      if (serverIsUp) {
-        // --- 🌐 TENTATIVE ONLINE ---
+    try {
+      // 1️⃣ ÉTAPE 1 : On vérifie si cet identifiant existe déjà en local dans SQLite
+      final db = await DatabaseHelper().database;
+      final List<Map<String, dynamic>> localUserExists = await db.query(
+        'users',
+        where: 'userEmail = ? OR userName = ? OR userPhone = ?',
+        whereArgs: [loginValue, loginValue, loginValue],
+        limit: 1,
+      );
+
+      if (localUserExists.isNotEmpty) {
+        // 🔐 L'utilisateur existe en local -> FLUX OFFLINE-FIRST STRICT
+        final localUser = await DatabaseHelper().checkLoginOffline(loginValue, passwordValue);
+
+        if (localUser != null) {
+          // 🎉 PIN Correct -> Connexion instantanée
+          final SharedPreferences prefs = await SharedPreferences.getInstance();
+          final String cachedCodeStructure = localUser['codeStructure']?.toString() ?? '';
+          final String userId = localUser['id'].toString();
+
+          // 🔄 On transmet le user tel quel pour récupérer son 'userProfile' stocké localement
+          await _saveSession(prefs, Map<String, dynamic>.from(localUser), cachedCodeStructure);
+
+          if (mounted) {
+            _showSnackBar('Connexion réussie 🛰️', Colors.blueGrey);
+            setState(() => _isLoading = false);
+          }
+
+          await _checkAndNavigate(userId, cachedCodeStructure, false);
+
+          // Sync discrète du profil en arrière-plan
+          _triggerBackgroundSync(loginValue, passwordValue);
+          return;
+        } else {
+          // ❌ L'utilisateur existe mais le PIN est FAUX -> On bloque DIRECTEMENT ici !
+          debugPrint("❌ [SÉCURITÉ] Rejet immédiat : Code PIN local invalide.");
+          _showErrorLogin();
+          return;
+        }
+      }
+
+      // 2️⃣ ÉTAPE 2 : TOUTE PREMIÈRE CONNEXION (L'utilisateur n'existe pas encore en local)
+      debugPrint("🔍 Utilisateur inconnu en local. Tentative de premier enregistrement via le serveur...");
+
+      if (await NetworkChecker.isBackendAccessible()) {
         final userData = await _userService.login(loginValue, passwordValue);
 
         if (userData != null) {
+          // Double sécurité : On s'assure que le serveur valide le PIN envoyé
+          final String serverCodeUser = (userData['codeUser'] ?? '').toString();
+          if (serverCodeUser.isNotEmpty && serverCodeUser != passwordValue && userData['isFirstLogin'] != true) {
+            _showErrorLogin();
+            return;
+          }
+
           final SharedPreferences prefs = await SharedPreferences.getInstance();
           final String userId = userData['id'].toString();
 
-          // 🆕 Extraction sécurisée de la structure par défaut depuis la liste Many-to-Many
           List<dynamic> structuresAssociees = userData['structures'] ?? [];
           String codeStructure = '';
-
           if (structuresAssociees.isNotEmpty) {
             codeStructure = structuresAssociees.first['codeStructure']?.toString() ?? '';
           }
 
-          // Préparer l'objet épuré pour la base locale SQLite
+          // 👑 On conserve 'userProfile' en local s'il vient du serveur, ou 'SUPER_ADMIN' par sécurité
+          String profileValue = userData['userProfile']?.toString() ?? 'SUPER_ADMIN';
+
           Map<String, dynamic> localUserMap = {
             'id': userId,
             'userName': userData['userName'] ?? loginValue,
             'userEmail': userData['userEmail'],
             'userPhone': userData['userPhone'],
-            'userProfile': userData['userProfile'],
+            'userProfile': profileValue, // ✅ Conservé pour le reste de ton application
             'codeStructure': codeStructure,
-            'codeUser': userData['codeUser'],
+            'codeUser': serverCodeUser.isNotEmpty ? serverCodeUser : passwordValue,
             'isActive': 1,
             'updatedAt': DateTime.now().toIso8601String(),
           };
 
+          // On initialise la session locale SQLite
           await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
-
-          // 🆕 Détection du flag de première connexion renvoyé par Spring Boot
           final bool isFirstLogin = userData['isFirstLogin'] == true;
-
           await _saveSession(prefs, userData, codeStructure);
 
           if (mounted) {
+            setState(() => _isLoading = false);
             if (isFirstLogin) {
-              setState(() => _isLoading = false);
-              // 🔒 Bloquer le flux standard et forcer le changement immédiat du PIN
-              _showChangePasswordDialog(userId, codeStructure);
+              _showChangePasswordDialog(userId, codeStructure, localUserMap);
             } else {
-              // Redirection classique
               _checkAndNavigate(userId, codeStructure, true);
             }
           }
         } else {
-          _showSnackBar('Identifiant ou code PIN incorrect ❌', Colors.red);
-          setState(() => _isLoading = false);
+          _showErrorLogin();
         }
       } else {
-        // --- 🛰️ TENTATIVE OFFLINE AUTOMATIQUE ---
-        debugPrint("🔄 Serveur inaccessible. Bascule : Mode Offline pour le login");
-
-        final localUser = await DatabaseHelper().getUserByIdentifier(loginValue);
-
-        if (localUser != null) {
-          final SharedPreferences prefs = await SharedPreferences.getInstance();
-          final String cachedCodeStructure = localUser['codeStructure']?.toString() ?? '';
-
-          // Adapter la structure de données locale pour la fonction de session
-          await _saveSession(prefs, Map<String, dynamic>.from(localUser), cachedCodeStructure);
-
-          if (mounted) {
-            _showSnackBar('Connexion hors-ligne réussie 🛰️', Colors.blueGrey);
-            _checkAndNavigate(localUser['id'].toString(), cachedCodeStructure, false);
-          }
-        } else {
-          _showSnackBar('Aucun profil local trouvé. Connectez-vous avec internet la première fois.', Colors.orange);
-          setState(() => _isLoading = false);
-        }
+        // Pas de réseau ET aucun compte local existant = impossible de se connecter
+        _showSnackBar('Première connexion requise en ligne 🌐', Colors.orangeAccent);
+        setState(() => _isLoading = false);
       }
     } catch (e) {
       setState(() => _isLoading = false);
@@ -158,8 +167,46 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  // 🔐 MODALE POUR FORCER LE CHANGEMENT DE CODE PIN (PREMIÈRE CONNEXION)
-  void _showChangePasswordDialog(String userId, String codeStructure) {
+  // 🛰️ Tâche asynchrone en arrière-plan pour synchroniser sans bloquer l'interface
+  void _triggerBackgroundSync(String login, String password) async {
+    try {
+      if (await NetworkChecker.isBackendAccessible()) {
+        final userData = await _userService.login(login, password);
+        if (userData != null) {
+          final String userId = userData['id'].toString();
+          List<dynamic> structuresAssociees = userData['structures'] ?? [];
+          String codeStructure = structuresAssociees.isNotEmpty
+              ? (structuresAssociees.first['codeStructure']?.toString() ?? '')
+              : '';
+
+          String profileValue = userData['userProfile']?.toString() ?? 'SUPER_ADMIN';
+
+          Map<String, dynamic> localUserMap = {
+            'id': userId,
+            'userName': userData['userName'] ?? login,
+            'userEmail': userData['userEmail'],
+            'userPhone': userData['userPhone'],
+            'userProfile': profileValue, // ✅ Préservé lors de la sync
+            'codeStructure': codeStructure,
+            'codeUser': userData['codeUser'] ?? password,
+            'isActive': 1,
+            'updatedAt': DateTime.now().toIso8601String(),
+          };
+          await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
+          debugPrint("🔄 [Sync Arrière-plan] Données utilisateur (avec profil) synchronisées.");
+        }
+      }
+    } catch (e) {
+      debugPrint("⚠️ [Sync Arrière-plan] Échec silencieux de la mise à jour : $e");
+    }
+  }
+
+  void _showErrorLogin() {
+    setState(() => _isLoading = false);
+    _showSnackBar('Identifiant ou code PIN incorrect ❌', Colors.red);
+  }
+
+  void _showChangePasswordDialog(String userId, String codeStructure, Map<String, dynamic> localUserMap) {
     final _dialogFormKey = GlobalKey<FormState>();
     final TextEditingController _newPinController = TextEditingController();
     final TextEditingController _confirmPinController = TextEditingController();
@@ -175,26 +222,15 @@ class _LoginScreenState extends State<LoginScreen> {
           builder: (context, setDialogState) {
             return AlertDialog(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              title: const Row(
-                children: [
-                  Icon(Icons.security, color: Colors.orange),
-                  SizedBox(width: 10),
-                  Text("Sécurité requise", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                ],
-              ),
+              title: const Row(children: [Icon(Icons.security, color: Colors.orange), SizedBox(width: 10), Text("Sécurité requise")]),
               content: Form(
                 key: _dialogFormKey,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text(
-                        "Il s'agit de votre première connexion. Par mesure de sécurité, veuillez personnaliser votre code PIN d'accès à 4 chiffres.",
-                        style: TextStyle(color: Colors.black54, fontSize: 13, height: 1.4),
-                      ),
+                      const Text("Première connexion : veuillez personnaliser votre code PIN à 4 chiffres.", style: TextStyle(color: Colors.black54, fontSize: 13)),
                       const SizedBox(height: 20),
-
-                      // Champ : Nouveau Code PIN
                       TextFormField(
                         controller: _newPinController,
                         obscureText: _obscureNew,
@@ -204,20 +240,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         decoration: InputDecoration(
                           labelText: "Nouveau Code PIN",
                           prefixIcon: const Icon(Icons.lock, color: Colors.orange),
-                          counterText: "",
-                          filled: true,
-                          fillColor: Colors.grey.withOpacity(0.05),
-                          suffixIcon: IconButton(
-                            icon: Icon(_obscureNew ? Icons.visibility_off : Icons.visibility, color: Colors.grey),
-                            onPressed: () => setDialogState(() => _obscureNew = !_obscureNew),
-                          ),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                          suffixIcon: IconButton(icon: Icon(_obscureNew ? Icons.visibility_off : Icons.visibility), onPressed: () => setDialogState(() => _obscureNew = !_obscureNew)),
                         ),
                         validator: (v) => (v == null || v.length != 4) ? "Requis (4 chiffres)" : null,
                       ),
                       const SizedBox(height: 15),
-
-                      // Champ : Confirmation du Code PIN
                       TextFormField(
                         controller: _confirmPinController,
                         obscureText: _obscureConfirm,
@@ -227,61 +254,42 @@ class _LoginScreenState extends State<LoginScreen> {
                         decoration: InputDecoration(
                           labelText: "Confirmer le Code PIN",
                           prefixIcon: const Icon(Icons.lock_outline, color: Colors.orange),
-                          counterText: "",
-                          filled: true,
-                          fillColor: Colors.grey.withOpacity(0.05),
-                          suffixIcon: IconButton(
-                            icon: Icon(_obscureConfirm ? Icons.visibility_off : Icons.visibility, color: Colors.grey),
-                            onPressed: () => setDialogState(() => _obscureConfirm = !_obscureConfirm),
-                          ),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                          suffixIcon: IconButton(icon: Icon(_obscureConfirm ? Icons.visibility_off : Icons.visibility), onPressed: () => setDialogState(() => _obscureConfirm = !_obscureConfirm)),
                         ),
-                        validator: (v) {
-                          if (v == null || v.isEmpty) return "Requis";
-                          if (v != _newPinController.text) return "Les codes PIN ne correspondent pas";
-                          return null;
-                        },
+                        validator: (v) => v != _newPinController.text ? "Les codes ne correspondent pas" : null,
                       ),
                     ],
                   ),
                 ),
               ),
               actions: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0, left: 5, right: 5),
-                  child: SizedBox(
-                    width: double.infinity,
-                    height: 50,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.orange,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        elevation: 0,
-                      ),
-                      onPressed: _isDialogLoading ? null : () async {
-                        if (!_dialogFormKey.currentState!.validate()) return;
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                    onPressed: _isDialogLoading ? null : () async {
+                      if (!_dialogFormKey.currentState!.validate()) return;
+                      setDialogState(() => _isDialogLoading = true);
 
-                        setDialogState(() => _isDialogLoading = true);
+                      String dynamicNewPin = _newPinController.text.trim();
+                      bool updateSuccess = await _userService.changeFirstPassword(userId, dynamicNewPin);
+                      setDialogState(() => _isDialogLoading = false);
 
-                        bool updateSuccess = await _userService.changeFirstPassword(
-                            userId,
-                            _newPinController.text.trim()
-                        );
+                      if (updateSuccess) {
+                        localUserMap['codeUser'] = dynamicNewPin;
+                        await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
 
-                        setDialogState(() => _isDialogLoading = false);
-
-                        if (updateSuccess) {
+                        if (context.mounted) {
                           Navigator.pop(context);
                           _showSnackBar('Code PIN mis à jour avec succès ! 🎉', Colors.green);
                           _checkAndNavigate(userId, codeStructure, true);
-                        } else {
-                          _showSnackBar('Erreur lors de la mise à jour du code PIN ❌', Colors.red);
                         }
-                      },
-                      child: _isDialogLoading
-                          ? const CircularProgressIndicator(color: Colors.white)
-                          : const Text("VALIDER MON NOUVEAU PIN", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                    ),
+                      } else {
+                        _showSnackBar('Erreur lors de la mise à jour ❌', Colors.red);
+                      }
+                    },
+                    child: _isDialogLoading ? const CircularProgressIndicator(color: Colors.white) : const Text("VALIDER MON NOUVEAU PIN"),
                   ),
                 ),
               ],
@@ -292,23 +300,20 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
+  // ✅ Sécurisé : On sauvegarde à nouveau 'userProfile' dans SharedPreferences pour les autres écrans
   Future<void> _saveSession(SharedPreferences prefs, Map<String, dynamic> data, String codeStructure) async {
     await prefs.setString('userId', data['id'].toString());
-    await prefs.setString('userProfile', data['userProfile'] ?? 'Vente');
     await prefs.setString('userName', data['userName'] ?? '');
+    await prefs.setString('userProfile', data['userProfile'] ?? 'SUPER_ADMIN'); // 🔐 Sauvegardé ici !
     await prefs.setString('codeStructure', codeStructure);
     await prefs.setString('selected_structure_id', codeStructure);
-
-    // Si la liste complète des structures est présente (Mode Online), on la met en cache SharedPreferences
     if (data['structures'] != null) {
       await prefs.setString('cached_user_structures', jsonEncode(data['structures']));
     }
   }
 
   void _showSnackBar(String message, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: color),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
   }
 
   @override
@@ -318,29 +323,22 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SingleChildScrollView(
         child: Column(
           children: [
-            // Header dégradé élégant PB-M
             Container(
               height: 300,
               width: double.infinity,
               decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.orange, Color(0xFFFF8C00)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                gradient: LinearGradient(colors: [Colors.orange, Color(0xFFFF8C00)], begin: Alignment.topLeft, end: Alignment.bottomRight),
                 borderRadius: BorderRadius.only(bottomLeft: Radius.circular(80)),
               ),
-              child: Column(
+              child: const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Icon(Icons.business_center, size: 80, color: Colors.white),
-                  const SizedBox(height: 10),
-                  const Text("PB-M", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.5)),
-                  Text("Performance & Gestion", style: TextStyle(color: Colors.white.withOpacity(0.9), fontSize: 14)),
+                  Icon(Icons.business_center, size: 80, color: Colors.white),
+                  SizedBox(height: 10),
+                  Text("PB-M", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.5)),
                 ],
               ),
             ),
-
             Padding(
               padding: const EdgeInsets.all(24.0),
               child: Form(
@@ -348,21 +346,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("Connexion", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Color(0xFF2D3436))),
-                    const SizedBox(height: 8),
-                    const Text("Veuillez entrer vos identifiants pour continuer", style: TextStyle(color: Colors.grey)),
+                    const Text("Connexion", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 30),
-
-                    // Champ Identifiant
-                    _buildTextField(
-                      controller: _loginController,
-                      label: "Identifiant",
-                      icon: Icons.person_outline_rounded,
-                      keyboardType: TextInputType.text,
-                    ),
+                    _buildTextField(controller: _loginController, label: "Identifiant", icon: Icons.person_outline_rounded),
                     const SizedBox(height: 20),
-
-                    // Champ Code PIN
                     _buildTextField(
                       controller: _passwordController,
                       label: "Code PIN (4 chiffres)",
@@ -373,9 +360,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       keyboardType: TextInputType.number,
                       isNumericPin: true,
                     ),
-
                     const SizedBox(height: 30),
-
                     _isLoading
                         ? const Center(child: CircularProgressIndicator(color: Colors.orange))
                         : SizedBox(
@@ -383,33 +368,42 @@ class _LoginScreenState extends State<LoginScreen> {
                       height: 55,
                       child: ElevatedButton(
                         onPressed: _login,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange,
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                        ),
-                        child: const Text("SE CONNECTER", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                        child: const Text("SE CONNECTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                       ),
                     ),
+                    const SizedBox(height: 25),
 
-                    const SizedBox(height: 30),
-
-                    Center(
-                      child: Wrap(
-                        alignment: WrapAlignment.center,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 4,
-                        runSpacing: 4,
-                        children: [
-                          const Text("Nouveau sur la plateforme ? ", style: TextStyle(color: Colors.black87)),
-                          GestureDetector(
-                            onTap: () {
-                              Navigator.push(context, MaterialPageRoute(builder: (context) => const RegisterScreen(isFromLogin: true)));
-                            },
-                            child: const Text("Créer un compte", style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold)),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        TextButton(
+                          onPressed: () {
+                            _showSnackBar("Fonctionnalité bientôt disponible. Veuillez contacter votre administrateur. ⚙️", Colors.blueGrey);
+                          },
+                          style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                          child: const Text(
+                            "Code PIN oublié ?",
+                            style: TextStyle(color: Colors.black54, fontSize: 14, fontWeight: FontWeight.w600),
                           ),
-                        ],
-                      ),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            // ✅ Mis en adéquation avec le paramètre attendu par le constructeur
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const RegisterScreen(isFromLogin: true),
+                              ),
+                            );
+                          },
+                          style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                          child: const Text(
+                            "Créer un compte",
+                            style: TextStyle(color: Colors.orange, fontSize: 14, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -432,11 +426,7 @@ class _LoginScreenState extends State<LoginScreen> {
     bool isNumericPin = false,
   }) {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(15),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 5))],
-      ),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 5))]),
       child: TextFormField(
         controller: controller,
         obscureText: obscureText,
@@ -447,26 +437,12 @@ class _LoginScreenState extends State<LoginScreen> {
           labelText: label,
           prefixIcon: Icon(icon, color: Colors.orange),
           counterText: "",
-          suffixIcon: isPassword
-              ? IconButton(
-            icon: Icon(obscureText ? Icons.visibility_off : Icons.visibility, color: Colors.grey),
-            onPressed: onToggleVisibility,
-          )
-              : null,
+          suffixIcon: isPassword ? IconButton(icon: Icon(obscureText ? Icons.visibility_off : Icons.visibility), onPressed: onToggleVisibility) : null,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
           filled: true,
           fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(vertical: 18),
         ),
-        validator: (value) {
-          if (value == null || value.isEmpty) {
-            return "Champ requis";
-          }
-          if (isNumericPin && value.length != 4) {
-            return "Le code PIN doit faire exactement 4 chiffres";
-          }
-          return null;
-        },
+        validator: (value) => (value == null || value.isEmpty) ? "Champ requis" : (isNumericPin && value.length != 4 ? "Doit faire 4 chiffres" : null),
       ),
     );
   }

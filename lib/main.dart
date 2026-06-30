@@ -1,19 +1,18 @@
 import 'package:fada/screens/structures_screen.dart';
+import 'package:fada/screens/welcome_screen.dart'; // ✅ Import du nouvel écran de bienvenue
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart'; // ✅ Import de Provider
-import 'providers/cart_provider.dart'; // ✅ Import de votre CartProvider
+import 'package:provider/provider.dart';
+import 'providers/cart_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/reset_password_screen.dart';
-import 'screens/cart_screen.dart'; // ✅ Import de l'écran Panier
+import 'screens/cart_screen.dart';
 
 void main() {
   runApp(
-    // ✅ On enveloppe l'application avec MultiProvider
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => CartProvider()),
-        // Vous pourrez ajouter d'autres providers ici plus tard (ex: UserProvider)
       ],
       child: const MyApp(),
     ),
@@ -27,11 +26,10 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Fada - Gestion de Structures',
+      title: 'PB-M - Gestion d\'Activité',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.orange),
         useMaterial3: true,
-        // Personnalisation globale des champs de saisie
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white,
@@ -50,15 +48,16 @@ class MyApp extends StatelessWidget {
         ),
       ),
 
-      // 👇 Route initiale
-      initialRoute: '/login',
+      // 👇 Modification de la route initiale pour démarrer sur le Bienvenue
+      initialRoute: '/welcome',
 
       routes: {
+        '/welcome': (context) => const WelcomeScreen(), // ✅ Nouvelle route d'accueil
         '/login': (context) => const LoginScreen(),
         '/register': (context) => const RegisterScreen(),
         '/reset-password': (context) => const ResetPasswordScreen(),
         '/structures': (context) => const StructuresScreen(),
-        '/cart': (context) => const CartScreen(), // ✅ Route vers le panier
+        '/cart': (context) => const CartScreen(),
       },
     );
   }

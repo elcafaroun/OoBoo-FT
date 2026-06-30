@@ -211,7 +211,7 @@ class SyncService {
       debugPrint("✅ Cache local rafraîchi.");
     } catch (e, stackTrace) {
       debugPrint("❌ Erreur critique : $e");
-      debugPrint("📜 Trace : $stackTrace");
+      debugPrint("📜Trace : $stackTrace");
     } finally {
       _isSyncing = false; // Libération du verrou
     }
@@ -219,11 +219,16 @@ class SyncService {
 
   Future<bool> _sendPasswordUpdateToServer(String userId, Map<String, dynamic> data) async {
     try {
+      debugPrint("🚀 [API PATCH] Envoi vers /reset-password/$userId avec body: ${jsonEncode(data)}");
+
       final response = await http.patch(
-        Uri.parse('$baseUrl/user/reset-password/$userId'),
+        Uri.parse('$_userUrl/reset-password/$userId'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(data),
       ).timeout(const Duration(seconds: 10));
+
+      debugPrint("🚨 [BACKEND RESP] Statut: ${response.statusCode} | Body: ${response.body}");
+
       return response.statusCode == 200;
     } catch (e) {
       debugPrint("❌ Erreur API Mot de passe : $e");

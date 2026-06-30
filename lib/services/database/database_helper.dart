@@ -1,3 +1,4 @@
+import 'package:fada/providers/file_storage_helper.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'dart:convert';
@@ -65,7 +66,7 @@ class DatabaseHelper {
     await db.execute('''CREATE TABLE structures (id TEXT PRIMARY KEY, nomStructure TEXT, codeStructure TEXT, emailStructure TEXT, phone1Structure TEXT, villeStructure TEXT, endSub TEXT, isActive INTEGER, lastUpdated TEXT, photoPath TEXT, version INTEGER, createdUserId TEXT)''');
     await db.execute('CREATE INDEX idx_struct_user ON structures (createdUserId)');
     await db.execute('''CREATE TABLE categories (id TEXT PRIMARY KEY, nameCat TEXT, codeStructure TEXT, isActive INTEGER, lastUpdated TEXT, photoPath TEXT, version INTEGER, deleted INTEGER DEFAULT 0)''');
-    await db.execute('''CREATE TABLE products (id TEXT PRIMARY KEY, productName TEXT, productPrice REAL, prixAchat REAL, productQte REAL, stockAlert REAL, codeStructure TEXT, categoryId TEXT, isActive INTEGER, lastUpdated TEXT, photoPath TEXT, version INTEGER, deleted INTEGER DEFAULT 0)''');
+    await db.execute('''CREATE TABLE products (id TEXT PRIMARY KEY, productName TEXT, productPrice REAL, prixAchat REAL, productQte REAL, stockAlert REAL,productQrCode TEXT, codeStructure TEXT, categoryId TEXT, isActive INTEGER, lastUpdated TEXT, photoPath TEXT, version INTEGER, deleted INTEGER DEFAULT 0)''');
     await db.execute('''CREATE TABLE commands (id TEXT PRIMARY KEY, customerName TEXT, status TEXT, totalAmount REAL, totalCredit REAL, codeStructure TEXT, paymentMethod TEXT, orderDate TEXT, lastUpdated TEXT, version INTEGER, deleted INTEGER DEFAULT 0, isSynced INTEGER DEFAULT 0)''');
     await db.execute('''CREATE TABLE customers (id TEXT PRIMARY KEY, numCust TEXT, codePin TEXT, customerName TEXT, createdDate TEXT, version INTEGER)''');
     await db.execute('''CREATE TABLE command_lines (id TEXT PRIMARY KEY, commandId TEXT, productId TEXT, productName TEXT, quantity INTEGER, unitPrice REAL, codeStructure TEXT, FOREIGN KEY (commandId) REFERENCES commands (id) ON DELETE CASCADE)''');
@@ -170,16 +171,69 @@ class DatabaseHelper {
 
   Future<void> syncProductsLocal(List<dynamic> products) async {
     final db = await database;
+
+    // Utilisation d'un Batch pour garantir l'atomicité et la performance
     Batch batch = db.batch();
+
     for (var p in products) {
-      batch.insert('products', {
-        'id': p['id'], 'productName': p['productName'], 'productPrice': p['productPrice'],
-        'prixAchat': p['prixAchat'], 'productQte': p['productQte'], 'stockAlert': p['stockAlert'],
-        'codeStructure': p['codeStructure'], 'categoryId': p['categoryId'], 'isActive': p['isActive'] == true ? 1 : 0,
-        'lastUpdated': DateTime.now().toIso8601String(), 'version': p['version'] ?? 0, 'deleted': p['deleted'] == true ? 1 : 0,
-      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      // 1. Préparation des données pour SQLite
+      final Map<String, dynamic> productData = {
+        'id': p['id'],
+        'productName': p['productName'],
+        'productPrice': (p['productPrice'] as num?)?.toDouble() ?? 0.0,
+        'prixAchat': (p['prixAchat'] as num?)?.toDouble() ?? 0.0,
+        'productQte': (p['productQte'] as num?)?.toDouble() ?? 0.0,
+        'stockAlert': (p['stockAlert'] as num?)?.toDouble() ?? 0.0,
+        'productQrCode': p['productQrCode']?.toString(), // Intégration du QR Code
+        'codeStructure': p['codeStructure'],
+        'categoryId': p['categoryId'],
+        'isActive': p['isActive'] == true ? 1 : 0,
+        'lastUpdated': DateTime.now().toIso8601String(),
+        'version': p['version'] ?? 0,
+        'deleted': p['deleted'] == true ? 1 : 0,
+        // Note : 'photoPath' n'est pas inséré ici, il sera mis à jour après téléchargement
+      };
+
+      batch.insert(
+          'products',
+          productData,
+          conflictAlgorithm: ConflictAlgorithm.replace
+      );
+
+      // 2. Gestion de l'image en arrière-plan (sans bloquer la synchro)
+      final String? imageUrl = p['photo'] ?? p['productPhotoUrl'];
+      if (imageUrl != null && imageUrl.isNotEmpty) {
+        final String productId = p['id'].toString();
+
+        // On lance le téléchargement sans 'await' pour ne pas ralentir le batch
+        FileStorageHelper.saveImageLocally(imageUrl, productId).then((localPath) {
+          if (localPath != null) {
+            // Mise à jour différée du chemin de l'image en base
+            db.update(
+                'products',
+                {'photoPath': localPath},
+                where: 'id = ?',
+                whereArgs: [productId]
+            );
+          }
+        });
+      }
     }
+
+    // Exécution de toutes les insertions en une seule transaction
     await batch.commit(noResult: true);
+    debugPrint("✅ Synchronisation des produits terminée.");
+  }
+// Dans votre DatabaseHelper, assurez-vous d'avoir cette méthode pour la recherche par QR
+  Future<Map<String, dynamic>?> getProductByQrCodeLocal(String qrCode) async {
+    final db = await database;
+    final List<Map<String, dynamic>> results = await db.query(
+      'products',
+      where: 'productQrCode = ? AND deleted = 0',
+      whereArgs: [qrCode.trim()],
+      limit: 1,
+    );
+    return results.isNotEmpty ? results.first : null;
   }
 
   Future<void> syncCommandsLocal(List<dynamic> commands) async {
@@ -306,9 +360,29 @@ class DatabaseHelper {
 
   Future<void> updateCustomerCodePinOffline(String userId, String newCode) async {
     final db = await database;
-    await db.update('customers', {'codePin': newCode}, where: 'id = ?', whereArgs: [userId]);
-    await addToSyncQueue('UPDATE_PASSWORD', 'customers', userId, {'newPassword': newCode});
+
+    // 1. Mise à jour de la table des utilisateurs locaux
+    await db.update(
+        'users',
+        {'codeUser': newCode, 'updatedAt': DateTime.now().toIso8601String()},
+        where: 'id = ?',
+        whereArgs: [userId]
+    );
+
+    // 2. Insertion dans la file d'attente avec la clé EXACTE attendue par Spring Boot
+    await db.insert('sync_queue', {
+      'action': 'UPDATE_PASSWORD',
+      'tableName': 'users',
+      'entityId': userId,
+      'data': jsonEncode({'newPassword': newCode}), // ✅ "newPassword" correspond à request.get("newPassword")
+      'timestamp': DateTime.now().millisecondsSinceEpoch.toString(),
+      'status': 'PENDING'
+    });
+
+    debugPrint("📝 [DB Helper] Changement PIN enregistré dans la queue avec 'newPassword'.");
   }
+
+
 
   int _parseBool(dynamic value) {
     if (value == null) return 0;
@@ -326,5 +400,29 @@ class DatabaseHelper {
   Future<List<Map<String, dynamic>>> getProductsByStructureLocal(String structureId) async {
     final db = await database;
     return await db.query('products', where: 'codeStructure = ?', whereArgs: [structureId]);
+  }
+// ✅ CORRECTION STRICTE : Authentification locale sécurisée
+  Future<Map<String, dynamic>?> checkLoginOffline(String identifier, String codePin) async {
+    // Sécurité : Si le code PIN fourni est vide, on refuse directement
+    if (codePin.trim().isEmpty) return null;
+
+    final db = await database;
+
+    // Les parenthèses autour des conditions d'identifiants sont CRITIQUES.
+    // Elles forcent SQLite à vérifier : (L'un des trois identifiants) ET (Le code PIN exact)
+    final List<Map<String, dynamic>> maps = await db.query(
+      'users',
+      where: '(userEmail = ? OR userName = ? OR userPhone = ?) AND codeUser = ? AND codeUser IS NOT NULL AND codeUser != ""',
+      whereArgs: [identifier, identifier, identifier, codePin],
+      limit: 1,
+    );
+
+    if (maps.isNotEmpty) {
+      debugPrint("🔐 [AUTH OFFLINE] Succès pour l'identifiant: $identifier");
+      return maps.first;
+    }
+
+    debugPrint("❌ [AUTH OFFLINE] Échec de correspondance pour: $identifier");
+    return null;
   }
 }

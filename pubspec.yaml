@@ -25,7 +25,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   connectivity_plus: ^6.0.0
   sqflite: ^2.3.0          # Gestion de la base locale
-  path: ^1.9.0             # Utile pour définir le chemin de la base de données
+  path: ^1.9.0
+  mobile_scanner: ^5.1.1
+  # Utile pour définir le chemin de la base de données
 
 dev_dependencies:
   flutter_test:
