@@ -96,6 +96,7 @@ class DatabaseHelper {
   Future<void> syncStructuresLocal(List<dynamic> structures) async {
     final db = await database;
     Batch batch = db.batch();
+
     for (var s in structures) {
       batch.insert('structures', {
         'id': (s['idStructure'] ?? s['id'] ?? '').toString(),
@@ -109,7 +110,17 @@ class DatabaseHelper {
         'lastUpdated': DateTime.now().toIso8601String(),
         'version': s['version'] ?? 0,
         'createdUserId': s['createdUserId']?.toString(),
+        // 'photoPath' est géré via updateEntityPhotoPath plus bas
       }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      // Gestion image en arrière-plan
+      final String? imageUrl = s['structPhotoUrl'] ?? s['photo'];
+      if (imageUrl != null && imageUrl.isNotEmpty) {
+        final String structId = (s['idStructure'] ?? s['id']).toString();
+        FileStorageHelper.saveImageLocally(imageUrl, "struct_$structId").then((path) {
+          if (path != null) updateEntityPhotoPath('structures', structId, path);
+        });
+      }
     }
     await batch.commit(noResult: true);
   }
@@ -159,14 +170,44 @@ class DatabaseHelper {
   Future<void> syncCategoriesLocal(List<dynamic> categories) async {
     final db = await database;
     Batch batch = db.batch();
+
     for (var cat in categories) {
+      // 1. Log pour voir ce qu'on reçoit du serveur
+      debugPrint("📥 [SYNC CAT] Traitement catégorie: ${cat['nameCat']} (ID: ${cat['id']})");
+
       batch.insert('categories', {
-        'id': cat['id'], 'nameCat': cat['nameCat'], 'codeStructure': cat['codeStructure'],
-        'isActive': cat['isActive'] == true ? 1 : 0, 'lastUpdated': DateTime.now().toIso8601String(),
-        'version': cat['version'] ?? 0, 'deleted': cat['deleted'] == true ? 1 : 0,
+        'id': cat['id'],
+        'nameCat': cat['nameCat'],
+        'codeStructure': cat['codeStructure'],
+        'isActive': cat['isActive'] == true ? 1 : 0,
+        'lastUpdated': DateTime.now().toIso8601String(),
+        'version': cat['version'] ?? 0,
+        'deleted': cat['deleted'] == true ? 1 : 0,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      // 2. Gestion image
+      final String? imageUrl = cat['photoCat'] ?? cat['categoryPhotoUrl'];
+
+      if (imageUrl != null && imageUrl.isNotEmpty) {
+        debugPrint("🖼️ [SYNC IMG] Image détectée pour ${cat['nameCat']}: $imageUrl");
+
+        final String catId = cat['id'].toString();
+
+        // On log le résultat du téléchargement
+        FileStorageHelper.saveImageLocally(imageUrl, "cat_$catId").then((path) {
+          if (path != null) {
+            debugPrint("✅ [SYNC IMG] Image sauvegardée avec succès: $path");
+            updateEntityPhotoPath('categories', catId, path);
+          } else {
+            debugPrint("❌ [SYNC IMG] Échec du téléchargement pour: $imageUrl");
+          }
+        });
+      } else {
+        debugPrint("⚠️ [SYNC IMG] Aucune image trouvée pour la catégorie: ${cat['nameCat']}");
+      }
     }
     await batch.commit(noResult: true);
+    debugPrint("🏁 [SYNC CAT] Batch commit terminé.");
   }
 
   Future<void> syncProductsLocal(List<dynamic> products) async {

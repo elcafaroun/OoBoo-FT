@@ -49,33 +49,46 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   Future<void> _loadData() async {
-    setState(() => isLoading = true);
+    // 1. Chargement initial depuis la BDD locale
     final localCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
     final localProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
-    setState(() {
-      categories = localCats;
-      allProducts = localProds;
-      filteredProducts = localProds;
-      isLoading = false;
-    });
 
+    if (mounted) {
+      setState(() {
+        categories = localCats;
+        allProducts = localProds;
+        filteredProducts = localProds;
+        isLoading = false;
+      });
+    }
+
+    // 2. Tenter la synchronisation
     if (await NetworkChecker.isBackendAccessible()) {
       try {
         final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId);
         final remoteProds = await _productService.getProductsByStructure(widget.structureId);
+
+        // On synchronise la BDD
         await _dbHelper.syncCategoriesLocal(remoteCats);
         await _dbHelper.syncProductsLocal(remoteProds);
-        if (mounted) {
+
+        // 3. IMPORTANT : Relire depuis la BDD locale après synchro
+        // Cela garantit que les chemins d'images et données sont cohérents
+        final updatedCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
+        final updatedProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
+
+        if (mounted && updatedCats.isNotEmpty) {
           setState(() {
-            categories = remoteCats;
-            allProducts = remoteProds;
-            _onSearchChanged();
+            categories = updatedCats;
+            allProducts = updatedProds;
+            _onSearchChanged(); // Met à jour la liste filtrée
           });
         }
-      } catch (e) { debugPrint("Erreur synchro : $e"); }
+      } catch (e) {
+        debugPrint("Erreur synchro : $e");
+      }
     }
   }
-
   void _onSearchChanged() {
     final query = _searchController.text.toLowerCase();
     setState(() {
@@ -150,18 +163,25 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         elevation: 0,
         centerTitle: true,
         actions: [
-          IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: _scanAndFindProduct),
-          IconButton(icon: const Icon(Icons.receipt_long_outlined), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen()))),
+          IconButton(icon: const Icon(Icons.qr_code_scanner, color: Colors.black), onPressed: _scanAndFindProduct),
+          IconButton(icon: const Icon(Icons.receipt_long_outlined, color: Colors.black), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen()))),
           _buildCartBadge(),
           const SizedBox(width: 8),
         ],
       ),
-      body: Column(
-        children: [
-          _buildSearchBar(),
-          _buildCategoryList(),
-          Expanded(child: isLoading ? const Center(child: CircularProgressIndicator(color: Colors.orange)) : _buildProductGrid()),
-        ],
+      // SafeArea pour éviter les débordements système
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildSearchBar(),
+            _buildCategoryList(),
+            Expanded(
+              child: isLoading
+                  ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+                  : _buildProductGrid(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -180,11 +200,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       ),
     );
   }
-
   Widget _buildCategoryList() {
     return SizedBox(
       height: 110,
       child: ListView.builder(
+        key: const ValueKey("category_list_view"), // Ajout ici
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 10),
         itemCount: categories.length + 1,
@@ -192,8 +212,22 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           final isAll = index == 0;
           final catId = isAll ? "TOUS" : categories[index - 1]['id'].toString();
           final isSelected = selectedCategoryId == catId;
+
+          // --- CORRECTION : Sécurisation de l'URL ---
+          String networkUrl = "";
+          if (!isAll) {
+            final photoCat = categories[index - 1]['photoCat'];
+            // On vérifie que la valeur existe et n'est pas "null"
+            if (photoCat != null && photoCat.toString() != "null" && photoCat.toString().isNotEmpty) {
+              networkUrl = "$baseUrl/category/image/$photoCat";
+            }
+          }
+
           return GestureDetector(
-            onTap: () { setState(() => selectedCategoryId = catId); _onSearchChanged(); },
+            onTap: () {
+              setState(() => selectedCategoryId = catId);
+              _onSearchChanged();
+            },
             child: Container(
               width: 75,
               margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -201,10 +235,31 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                 children: [
                   Container(
                     height: 60, width: 60,
-                    decoration: BoxDecoration(shape: BoxShape.circle, color: isSelected ? Colors.orange : Colors.white, border: Border.all(color: isSelected ? Colors.orange : Colors.grey.shade200, width: 2)),
-                    child: Center(child: isAll ? Icon(Icons.apps, color: isSelected ? Colors.white : Colors.grey) : ClipOval(child: Image.network("$baseUrl/category/image/${categories[index - 1]['photoCat']}", fit: BoxFit.cover, width: 60, height: 60, errorBuilder: (_, __, ___) => const Icon(Icons.category)))),
+                    decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isSelected ? Colors.orange : Colors.white,
+                        border: Border.all(color: isSelected ? Colors.orange : Colors.grey.shade200, width: 2)
+                    ),
+                    child: Center(
+                      child: isAll
+                          ? Icon(Icons.apps, color: isSelected ? Colors.white : Colors.grey)
+                          : ClipOval(
+                        child: ProductImageWidget(
+                          // --- CLÉ UNIQUE AJOUTÉE POUR LA STABILITÉ ---
+                          key: ValueKey("cat_${categories[index - 1]['id']}_${categories[index - 1]['photoPath'] ?? 'no_path'}"),
+                          localPath: categories[index - 1]['photoPath'] ?? '',
+                          networkUrl: networkUrl, // URL sécurisée
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                      ),
+                    ),
                   ),
-                  Text(isAll ? "Tout" : categories[index - 1]['nameCat'], style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500), textAlign: TextAlign.center, maxLines: 1),
+                  Text(
+                      isAll ? "Tout" : categories[index - 1]['nameCat'] ?? '',
+                      style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500),
+                      textAlign: TextAlign.center,
+                      maxLines: 1
+                  ),
                 ],
               ),
             ),
@@ -236,6 +291,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                     // --- MODIFICATION ICI ---
                     child: ProductImageWidget(
+                      key: ValueKey("${p['id']}_${p['photoPath'] ?? 'no_path'}"),
                       localPath: p['photoPath'], // <-- SQLite renvoie ce champ
                       networkUrl: imageUrl,
                     ),
@@ -256,85 +312,86 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => StatefulBuilder(builder: (context, setModalState) {
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.85,
-          decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(30))
-          ),
-          child: Column(
-            children: [
-              // UTILISATION DU WIDGET INTELLIGENT ICI
-              ProductImageWidget(
-                localPath: p['photoPath'], // Le chemin venant de SQLite
-                networkUrl: imageUrl,
-                height: 300,
-                width: double.infinity,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-              ),
-
-              Padding(
-                  padding: const EdgeInsets.all(25),
-                  child: Column(
-                      children: [
-                        Row(
-                            children: [
-                              Expanded(
-                                  child: Text(
-                                      p['productName'] ?? '',
-                                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)
-                                  )
+      builder: (context) => SafeArea( // SafeArea indispensable ici
+        child: StatefulBuilder(builder: (context, setModalState) {
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.85,
+            decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(30))
+            ),
+            child: Column(
+              children: [
+                // Image intelligente avec support local/réseau
+                ProductImageWidget(
+                  localPath: p['photoPath'],
+                  networkUrl: imageUrl,
+                  height: 300,
+                  width: double.infinity,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+                ),
+                Padding(
+                    padding: const EdgeInsets.all(25),
+                    child: Column(
+                        children: [
+                          Row(
+                              children: [
+                                Expanded(
+                                    child: Text(
+                                        p['productName'] ?? '',
+                                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)
+                                    )
+                                ),
+                                Text(
+                                    "${p['productPrice']} FCFA",
+                                    style: const TextStyle(fontSize: 20, color: Colors.orange, fontWeight: FontWeight.w900)
+                                )
+                              ]
+                          ),
+                          const SizedBox(height: 20),
+                          Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                    icon: const Icon(Icons.remove_circle_outline),
+                                    onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null
+                                ),
+                                Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                                    child: Text("$quantity", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))
+                                ),
+                                IconButton(
+                                    icon: const Icon(Icons.add_circle_outline, color: Colors.orange),
+                                    onPressed: () => setModalState(() => quantity++)
+                                ),
+                              ]
+                          ),
+                          const SizedBox(height: 20),
+                          ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.orange,
+                                  minimumSize: const Size(double.infinity, 55)
                               ),
-                              Text(
-                                  "${p['productPrice']} FCFA",
-                                  style: const TextStyle(fontSize: 20, color: Colors.orange, fontWeight: FontWeight.w900)
-                              )
-                            ]
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              IconButton(
-                                  icon: const Icon(Icons.remove_circle_outline),
-                                  onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null
-                              ),
-                              Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                                  child: Text("$quantity", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))
-                              ),
-                              IconButton(
-                                  icon: const Icon(Icons.add_circle_outline, color: Colors.orange),
-                                  onPressed: () => setModalState(() => quantity++)
-                              ),
-                            ]
-                        ),
-                        const SizedBox(height: 20),
-                        ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.orange,
-                                minimumSize: const Size(double.infinity, 55)
-                            ),
-                            onPressed: () {
-                              Provider.of<CartProvider>(context, listen: false).addItem(
-                                  p['id'].toString(),
-                                  p['productName'],
-                                  (p['productPrice'] as num).toDouble(),
-                                  imageUrl,
-                                  quantity
-                              );
-                              Navigator.pop(context);
-                            },
-                            child: const Text("AJOUTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
-                        ),
-                      ]
-                  )
-              ),
-            ],
-          ),
-        );
-      }),
+                              onPressed: () {
+                                Provider.of<CartProvider>(context, listen: false).addItem(
+                                    p['id'].toString(),
+                                    p['productName'],
+                                    (p['productPrice'] as num).toDouble(),
+                                    imageUrl,
+                                    quantity
+                                );
+                                Navigator.pop(context);
+                              },
+                              child: const Text("AJOUTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
+                          ),
+                        ]
+                    )
+                ),
+              ],
+            ),
+          );
+        }),
+      ),
     );
   }
 

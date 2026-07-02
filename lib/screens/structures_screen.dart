@@ -242,6 +242,7 @@ class _StructuresScreenState extends State<StructuresScreen> {
     );
   }
 
+
   Widget _buildStructureCard(dynamic s) {
     final String localPath = s['photoPath'] ?? '';
     String photoUrl = s['structPhotoUrl'] ?? '';

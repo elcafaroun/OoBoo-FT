@@ -19,50 +19,47 @@ class ProductImageWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // On définit le widget de base
-    Widget imageWidget = _buildImage();
+    // 1. Vérification du fichier local de manière persistante
+    final bool hasLocalFile = localPath != null &&
+        localPath!.isNotEmpty &&
+        localPath != "null" &&
+        File(localPath!).existsSync();
 
-    // Si on a un borderRadius, on encapsule dans un ClipRRect
-    if (borderRadius != null) {
-      imageWidget = ClipRRect(
-        borderRadius: borderRadius!,
-        child: imageWidget,
+    Widget content;
+
+    if (hasLocalFile) {
+      content = Image.file(File(localPath!), fit: BoxFit.cover);
+    } else if (networkUrl.isNotEmpty && networkUrl != "null") {
+      content = Image.network(
+        networkUrl,
+        fit: BoxFit.cover,
+        // frameBuilder est la clé : il permet de conserver l'image précédente
+        // ou d'afficher le contenu sans "saut" brutal lors du chargement.
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded) return child;
+          return frame != null
+              ? child
+              : const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)));
+        },
+        errorBuilder: (_, __, ___) => Container(
+          color: Colors.grey[100],
+          child: const Icon(Icons.image_not_supported, color: Colors.grey),
+        ),
+      );
+    } else {
+      content = Container(
+        color: Colors.grey[100],
+        child: const Icon(Icons.photo_size_select_actual_outlined, color: Colors.grey),
       );
     }
 
-    // On force l'expansion si aucune dimension fixe n'est fournie
-    if (width == null && height == null) {
-      return SizedBox.expand(child: imageWidget);
-    }
-
+    // Application du clip et des dimensions
     return SizedBox(
-      width: width,
-      height: height,
-      child: imageWidget,
-    );
-  }
-
-  Widget _buildImage() {
-    // 1. Image locale
-    if (localPath != null && localPath!.isNotEmpty && File(localPath!).existsSync()) {
-      return Image.file(
-        File(localPath!),
-        width: width ?? double.infinity,
-        height: height ?? double.infinity,
-        fit: BoxFit.cover, // "cover" assure le remplissage total sans déformation
-      );
-    }
-
-    // 2. Image réseau
-    return Image.network(
-      networkUrl,
       width: width ?? double.infinity,
       height: height ?? double.infinity,
-      fit: BoxFit.cover, // "cover" assure le remplissage total sans déformation
-      errorBuilder: (_, __, ___) => Container(
-        color: Colors.grey[200],
-        child: const Icon(Icons.image_not_supported, size: 40, color: Colors.grey),
-      ),
+      child: borderRadius != null
+          ? ClipRRect(borderRadius: borderRadius!, child: content)
+          : content,
     );
   }
 }
