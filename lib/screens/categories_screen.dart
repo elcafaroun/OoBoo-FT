@@ -1,3 +1,4 @@
+import 'package:fada/screens/notifications_screen.dart';
 import 'package:fada/screens/scanner_screen.dart';
 import 'package:fada/services/network_checker.dart';
 import 'package:flutter/material.dart';
@@ -10,12 +11,11 @@ import '../utils/constants.dart';
 import 'cart_screen.dart';
 import 'orders_screen.dart';
 import 'package:collection/collection.dart';
-import '../widgets/product_image_widget.dart'; // Ajustez le chemin selon votre structure
+import '../widgets/product_image_widget.dart';
 
 class CategoriesScreen extends StatefulWidget {
   final String structureId;
   final String structureName;
-
   const CategoriesScreen({super.key, required this.structureId, required this.structureName});
 
   @override
@@ -23,6 +23,8 @@ class CategoriesScreen extends StatefulWidget {
 }
 
 class _CategoriesScreenState extends State<CategoriesScreen> {
+  int _alertCount = 0; // <--- AJOUTEZ CETTE LIGNE
+
   final CategoryService _categoryService = CategoryService();
   final ProductService _productService = ProductService();
   final DatabaseHelper _dbHelper = DatabaseHelper();
@@ -49,7 +51,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   Future<void> _loadData() async {
-    // 1. Chargement initial depuis la BDD locale
     final localCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
     final localProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
 
@@ -58,22 +59,18 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         categories = localCats;
         allProducts = localProds;
         filteredProducts = localProds;
+        _alertCount = localProds.where((p) => (p['productQte'] ?? 0) <= 5).length;
         isLoading = false;
       });
     }
 
-    // 2. Tenter la synchronisation
     if (await NetworkChecker.isBackendAccessible()) {
       try {
         final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId);
         final remoteProds = await _productService.getProductsByStructure(widget.structureId);
-
-        // On synchronise la BDD
         await _dbHelper.syncCategoriesLocal(remoteCats);
         await _dbHelper.syncProductsLocal(remoteProds);
 
-        // 3. IMPORTANT : Relire depuis la BDD locale après synchro
-        // Cela garantit que les chemins d'images et données sont cohérents
         final updatedCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
         final updatedProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
 
@@ -81,7 +78,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           setState(() {
             categories = updatedCats;
             allProducts = updatedProds;
-            _onSearchChanged(); // Met à jour la liste filtrée
+            _onSearchChanged();
           });
         }
       } catch (e) {
@@ -89,6 +86,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       }
     }
   }
+
   void _onSearchChanged() {
     final query = _searchController.text.toLowerCase();
     setState(() {
@@ -101,7 +99,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   Future<void> _scanAndFindProduct() async {
-    // 1. Ouvrir le scanner
     final String? codeScanne = await Navigator.push<String>(
       context,
       MaterialPageRoute(builder: (context) => const ScannerScreen()),
@@ -109,48 +106,26 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
     if (codeScanne != null && codeScanne.isNotEmpty) {
       final String cleanCode = codeScanne.toLowerCase().trim();
+      final product = allProducts.firstWhereOrNull((p) => p['productQrCode']?.toString().toLowerCase().trim() == cleanCode);
 
-      // 2. Recherche sécurisée sans erreur de type
-      final product = allProducts.firstWhereOrNull(
-              (p) => p['productQrCode']?.toString().toLowerCase().trim() == cleanCode
-      );
-
-      // 3. Si trouvé, on ajoute au panier immédiatement
       if (product != null) {
         final String imageUrl = product['photo'] ?? product['productPhotoUrl'] ?? '';
-
-        // Ajout au panier
-        Provider.of<CartProvider>(context, listen: false).addItem(
-          product['id'].toString(),
-          product['productName'],
-          (product['productPrice'] as num).toDouble(),
-          imageUrl,
-          1,
-        );
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text("Ajouté au panier : ${product['productName']}"),
-              backgroundColor: Colors.green,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
+        Provider.of<CartProvider>(context, listen: false).addItem(product['id'].toString(), product['productName'], (product['productPrice'] as num).toDouble(), imageUrl, 1);
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Ajouté : ${product['productName']}"), backgroundColor: Colors.green, behavior: SnackBarBehavior.floating));
       } else {
-        // 4. Feedback si aucun produit ne correspond
-        debugPrint("❌ Aucun produit trouvé en mémoire avec le code : $cleanCode");
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Aucun produit ne correspond à ce code."),
-              backgroundColor: Colors.red,
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Aucun produit trouvé."), backgroundColor: Colors.red, behavior: SnackBarBehavior.floating));
       }
     }
+  }
+
+  Widget _buildActionButton(IconData icon, VoidCallback onPressed) {
+    return IconButton(
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(),
+      icon: Icon(icon, size: 28),
+      color: Colors.black,
+      onPressed: onPressed,
+    );
   }
 
   @override
@@ -158,27 +133,94 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF9F7F2),
       appBar: AppBar(
-        title: Text(widget.structureName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        title: const Text(""), // Vide pour libérer l'espace
         backgroundColor: Colors.white,
         elevation: 0,
-        centerTitle: true,
         actions: [
-          IconButton(icon: const Icon(Icons.qr_code_scanner, color: Colors.black), onPressed: _scanAndFindProduct),
-          IconButton(icon: const Icon(Icons.receipt_long_outlined, color: Colors.black), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen()))),
-          _buildCartBadge(),
-          const SizedBox(width: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            child: Row(
+              children: [
+                _buildActionButton(Icons.qr_code_scanner, _scanAndFindProduct),
+                const SizedBox(width: 20),
+                _buildActionButton(Icons.receipt_long_outlined, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen()))),
+                const SizedBox(width: 20),
+                _buildCartBadge(),
+              ],
+            ),
+          ),
         ],
       ),
-      // SafeArea pour éviter les débordements système
       body: SafeArea(
         child: Column(
           children: [
+            _buildStructureHeader(), // Nom de la structure sous l'AppBar
             _buildSearchBar(),
             _buildCategoryList(),
             Expanded(
               child: isLoading
                   ? const Center(child: CircularProgressIndicator(color: Colors.orange))
                   : _buildProductGrid(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStructureHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      // Le container prend toute la largeur
+      width: double.infinity,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.orange.withOpacity(0.2)),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 5, offset: const Offset(0, 2))
+          ],
+        ),
+        child: Row(
+          children: [
+            // Nom de la structure avec icône
+            const Icon(Icons.storefront, color: Colors.orange, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                widget.structureName,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+
+            // Nouvelles icônes ajoutées ici
+            IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              icon: Badge(
+                isLabelVisible: _alertCount > 0, // Assurez-vous de calculer cette variable
+                label: Text("$_alertCount"),
+                backgroundColor: Colors.red,
+                child: const Icon(Icons.notifications_outlined, color: Colors.black54, size: 22),
+              ),
+              onPressed: () {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => NotificationsScreen(structureId: widget.structureId)
+                    )
+                );
+              },
+            ),
+            const SizedBox(width: 15),
+            IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              icon: const Icon(Icons.chat_bubble_outline, color: Colors.black54, size: 22),
+              onPressed: () { /* TODO: Logique chat */ },
             ),
           ],
         ),
@@ -200,11 +242,12 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       ),
     );
   }
+
   Widget _buildCategoryList() {
     return SizedBox(
       height: 110,
       child: ListView.builder(
-        key: const ValueKey("category_list_view"), // Ajout ici
+        key: const ValueKey("category_list_view"),
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 10),
         itemCount: categories.length + 1,
@@ -212,22 +255,16 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           final isAll = index == 0;
           final catId = isAll ? "TOUS" : categories[index - 1]['id'].toString();
           final isSelected = selectedCategoryId == catId;
-
-          // --- CORRECTION : Sécurisation de l'URL ---
           String networkUrl = "";
           if (!isAll) {
             final photoCat = categories[index - 1]['photoCat'];
-            // On vérifie que la valeur existe et n'est pas "null"
             if (photoCat != null && photoCat.toString() != "null" && photoCat.toString().isNotEmpty) {
               networkUrl = "$baseUrl/category/image/$photoCat";
             }
           }
 
           return GestureDetector(
-            onTap: () {
-              setState(() => selectedCategoryId = catId);
-              _onSearchChanged();
-            },
+            onTap: () { setState(() => selectedCategoryId = catId); _onSearchChanged(); },
             child: Container(
               width: 75,
               margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
@@ -235,31 +272,21 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                 children: [
                   Container(
                     height: 60, width: 60,
-                    decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isSelected ? Colors.orange : Colors.white,
-                        border: Border.all(color: isSelected ? Colors.orange : Colors.grey.shade200, width: 2)
-                    ),
+                    decoration: BoxDecoration(shape: BoxShape.circle, color: isSelected ? Colors.orange : Colors.white, border: Border.all(color: isSelected ? Colors.orange : Colors.grey.shade200, width: 2)),
                     child: Center(
                       child: isAll
                           ? Icon(Icons.apps, color: isSelected ? Colors.white : Colors.grey)
                           : ClipOval(
                         child: ProductImageWidget(
-                          // --- CLÉ UNIQUE AJOUTÉE POUR LA STABILITÉ ---
                           key: ValueKey("cat_${categories[index - 1]['id']}_${categories[index - 1]['photoPath'] ?? 'no_path'}"),
                           localPath: categories[index - 1]['photoPath'] ?? '',
-                          networkUrl: networkUrl, // URL sécurisée
+                          networkUrl: networkUrl,
                           borderRadius: BorderRadius.circular(30),
                         ),
                       ),
                     ),
                   ),
-                  Text(
-                      isAll ? "Tout" : categories[index - 1]['nameCat'] ?? '',
-                      style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500),
-                      textAlign: TextAlign.center,
-                      maxLines: 1
-                  ),
+                  Text(isAll ? "Tout" : categories[index - 1]['nameCat'] ?? '', style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500), textAlign: TextAlign.center, maxLines: 1),
                 ],
               ),
             ),
@@ -272,14 +299,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   Widget _buildProductGrid() {
     return GridView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 16, mainAxisSpacing: 16
-      ),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 16, mainAxisSpacing: 16),
       itemCount: filteredProducts.length,
       itemBuilder: (context, index) {
         final p = filteredProducts[index];
         final String imageUrl = p['photo'] ?? p['productPhotoUrl'] ?? '';
-
         return GestureDetector(
           onTap: () => _showFullDetails(p, imageUrl),
           child: Container(
@@ -289,12 +313,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                 Expanded(
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                    // --- MODIFICATION ICI ---
-                    child: ProductImageWidget(
-                      key: ValueKey("${p['id']}_${p['photoPath'] ?? 'no_path'}"),
-                      localPath: p['photoPath'], // <-- SQLite renvoie ce champ
-                      networkUrl: imageUrl,
-                    ),
+                    child: ProductImageWidget(key: ValueKey("${p['id']}_${p['photoPath'] ?? 'no_path'}"), localPath: p['photoPath'], networkUrl: imageUrl),
                   ),
                 ),
                 Padding(padding: const EdgeInsets.all(12), child: Column(children: [Text(p['productName'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)), Text("${p['productPrice']} FCFA", style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w900))])),
@@ -312,78 +331,23 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => SafeArea( // SafeArea indispensable ici
+      builder: (context) => SafeArea(
         child: StatefulBuilder(builder: (context, setModalState) {
           return Container(
             height: MediaQuery.of(context).size.height * 0.85,
-            decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(30))
-            ),
+            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
             child: Column(
               children: [
-                // Image intelligente avec support local/réseau
-                ProductImageWidget(
-                  localPath: p['photoPath'],
-                  networkUrl: imageUrl,
-                  height: 300,
-                  width: double.infinity,
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
-                ),
+                ProductImageWidget(localPath: p['photoPath'], networkUrl: imageUrl, height: 300, width: double.infinity, borderRadius: const BorderRadius.vertical(top: Radius.circular(30))),
                 Padding(
                     padding: const EdgeInsets.all(25),
                     child: Column(
                         children: [
-                          Row(
-                              children: [
-                                Expanded(
-                                    child: Text(
-                                        p['productName'] ?? '',
-                                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)
-                                    )
-                                ),
-                                Text(
-                                    "${p['productPrice']} FCFA",
-                                    style: const TextStyle(fontSize: 20, color: Colors.orange, fontWeight: FontWeight.w900)
-                                )
-                              ]
-                          ),
+                          Row(children: [Expanded(child: Text(p['productName'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))), Text("${p['productPrice']} FCFA", style: const TextStyle(fontSize: 20, color: Colors.orange, fontWeight: FontWeight.w900))]),
                           const SizedBox(height: 20),
-                          Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                IconButton(
-                                    icon: const Icon(Icons.remove_circle_outline),
-                                    onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null
-                                ),
-                                Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                                    child: Text("$quantity", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))
-                                ),
-                                IconButton(
-                                    icon: const Icon(Icons.add_circle_outline, color: Colors.orange),
-                                    onPressed: () => setModalState(() => quantity++)
-                                ),
-                              ]
-                          ),
+                          Row(mainAxisAlignment: MainAxisAlignment.center, children: [IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null), Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Text("$quantity", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))), IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.orange), onPressed: () => setModalState(() => quantity++))]),
                           const SizedBox(height: 20),
-                          ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.orange,
-                                  minimumSize: const Size(double.infinity, 55)
-                              ),
-                              onPressed: () {
-                                Provider.of<CartProvider>(context, listen: false).addItem(
-                                    p['id'].toString(),
-                                    p['productName'],
-                                    (p['productPrice'] as num).toDouble(),
-                                    imageUrl,
-                                    quantity
-                                );
-                                Navigator.pop(context);
-                              },
-                              child: const Text("AJOUTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))
-                          ),
+                          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, minimumSize: const Size(double.infinity, 55)), onPressed: () { Provider.of<CartProvider>(context, listen: false).addItem(p['id'].toString(), p['productName'], (p['productPrice'] as num).toDouble(), imageUrl, quantity); Navigator.pop(context); }, child: const Text("AJOUTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
                         ]
                     )
                 ),
@@ -396,6 +360,20 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   Widget _buildCartBadge() {
-    return Consumer<CartProvider>(builder: (context, cart, _) => Badge(label: Text("${cart.items.length}"), isLabelVisible: cart.items.isNotEmpty, backgroundColor: Colors.orange, child: IconButton(icon: const Icon(Icons.shopping_cart_outlined), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CartScreen())))));
+    return Consumer<CartProvider>(
+      builder: (context, cart, _) => Badge(
+        label: Text("${cart.items.length}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+        isLabelVisible: cart.items.isNotEmpty,
+        backgroundColor: Colors.orange,
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        child: IconButton(
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          icon: const Icon(Icons.shopping_cart_outlined, size: 28),
+          color: Colors.black,
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CartScreen())),
+        ),
+      ),
+    );
   }
 }
