@@ -15,11 +15,13 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _userName;
   String? _userProfile;
   String? _codeStructure;
   String? _userId;
+
+  String _lastSyncDateLabel = "Jamais";
 
   int _pendingSyncCount = 0;
   bool _isInitialSyncing = true;
@@ -29,35 +31,63 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void initState() {
-    super.initState(); // ✅ FIX : Syntaxe nettoyée ici
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _handleStartup();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshPendingCount();
+    }
   }
 
   Future<void> _handleStartup() async {
     setState(() => _isInitialSyncing = true);
     try {
-      await _loadUserProfile();
-      await _refreshPendingCount();
+      final prefs = await SharedPreferences.getInstance();
+      final String? savedUserId = prefs.getString('userId');
 
-      if (_userId != null && _userId!.isNotEmpty) {
-        if (await NetworkChecker.isBackendAccessible()) {
-          await _syncService.fullSynchronization(_codeStructure ?? "", _userId!);
-          await _refreshPendingCount();
+      if (savedUserId != null && savedUserId.isNotEmpty) {
+        // 1. Récupérer d'abord le profil pour savoir si c'est un administrateur
+        final userMap = await _dbHelper.getActiveUserLocal(savedUserId);
+        String profile = userMap != null ? (userMap['userProfile'] ?? '') : '';
+        bool isAdmin = profile.toLowerCase().contains("admin");
+
+        if (isAdmin) {
+          debugPrint("👑 Profil Administrateur détecté : Mode online strict, pas de synchronisation locale.");
+          if (userMap != null) {
+            setState(() {
+              _userId = savedUserId;
+              _userName = userMap['userName'];
+              _userProfile = userMap['userProfile'];
+              _codeStructure = userMap['codeStructure'];
+            });
+          }
         } else {
-          // 🛰️ CAS HORS-LIGNE : Le serveur n'est pas joignable au démarrage
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showSnackBar(
-                "Mode hors-ligne actif 🛰️. Les données locales seront utilisées.",
-                Colors.blueGrey
-            );
-          });
+          // 2. Comportement standard (Agents / Vente) : Tenter une synchronisation si réseau disponible
+          if (await NetworkChecker.isBackendAccessible()) {
+            debugPrint("🌐 Connexion détectée au démarrage, lancement de la synchro...");
+            final String structureId = prefs.getString('selected_structure_id') ?? "";
+            await _syncService.fullSynchronization(structureId, savedUserId);
+          } else {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _showSnackBar("Mode hors-ligne actif 🛰️.", Colors.blueGrey);
+            });
+          }
+
+          // Charger ensuite les données depuis la base locale
+          await _loadUserProfile();
+          await _loadLastSyncDate();
+          await _refreshPendingCount();
         }
-
-        final db = await _dbHelper.database;
-        final catCount = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM categories"));
-        final prodCount = Sqflite.firstIntValue(await db.rawQuery("SELECT COUNT(*) FROM products"));
-
-        debugPrint("🔍 [DB CHECK] Catégories trouvées : $catCount, Produits trouvés : $prodCount");
       }
     } catch (e) {
       debugPrint("❌ Erreur démarrage : $e");
@@ -66,15 +96,39 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _loadLastSyncDate() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? lastSync = prefs.getString('last_sync_date');
+    if (lastSync != null) {
+      DateTime dt = DateTime.parse(lastSync);
+      setState(() {
+        _lastSyncDateLabel = "${dt.day}/${dt.month} à ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
+      });
+    }
+  }
 
   Future<void> _loadUserProfile() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _userProfile = prefs.getString('userProfile');
-      _userName = prefs.getString('userName');
-      _codeStructure = prefs.getString('codeStructure');
-      _userId = prefs.getString('userId');
-    });
+    final String? userId = prefs.getString('userId');
+
+    if (userId != null) {
+      final userMap = await _dbHelper.getActiveUserLocal(userId);
+
+      if (userMap != null) {
+        setState(() {
+          _userId = userId;
+          _userName = userMap['userName'];
+          _userProfile = userMap['userProfile'];
+          _codeStructure = userMap['codeStructure'];
+
+          final String? lastSync = userMap['updatedAt'];
+          if (lastSync != null) {
+            DateTime dt = DateTime.parse(lastSync);
+            _lastSyncDateLabel = "${dt.day}/${dt.month} à ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
+          }
+        });
+      }
+    }
   }
 
   Future<void> _refreshPendingCount() async {
@@ -88,123 +142,62 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _handleManualSync() async {
-    // 1️⃣ Vérification immédiate de la connexion
-    bool online = await NetworkChecker.isBackendAccessible();
-
-    if (!online) {
-      _showSnackBar(
-          "Impossible de synchroniser : aucune connexion au serveur ❌",
-          Colors.redAccent
-      );
-      return; // On arrête l'exécution ici
+    // Si c'est un admin, pas de synchro locale nécessaire
+    if (_userProfile != null && _userProfile!.toLowerCase().contains("admin")) {
+      _showSnackBar("Profil Administrateur : Fonctionnement direct en ligne ✅", Colors.blue);
+      return;
     }
 
-    // 2️⃣ Si la connexion est bonne, on procède à la synchro
+    bool online = await NetworkChecker.isBackendAccessible();
+    if (!online) {
+      _showSnackBar("Aucune connexion au serveur ❌", Colors.redAccent);
+      return;
+    }
     _showSnackBar("Synchronisation en cours...", Colors.orange);
     try {
-      await _syncService.fullSynchronization(_codeStructure ?? "", _userId!);
+      await _syncService.fullSynchronization(_codeStructure ?? "", _userId ?? "");
       await _refreshPendingCount();
-      if (mounted) _showSnackBar("Synchronisation réussie ✅", Colors.green);
+      await _loadUserProfile();
+      _showSnackBar("Synchronisation réussie ✅", Colors.green);
     } catch (e) {
-      _showSnackBar("Échec de la synchronisation : $e", Colors.redAccent);
+      _showSnackBar("Échec : $e", Colors.redAccent);
     }
   }
 
   void _showChangePasswordDialog() {
-    final _formKey = GlobalKey<FormState>();
-    final TextEditingController _newPassController = TextEditingController();
-    final TextEditingController _confirmPassController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    final newPassController = TextEditingController();
+    final confirmPassController = TextEditingController();
 
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: Colors.purple.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-              child: const Icon(Icons.lock_reset_rounded, color: Colors.purple),
-            ),
-            const SizedBox(width: 12),
-            const Text("Sécurité PIN", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-          ],
-        ),
+        title: const Text("Sécurité PIN"),
         content: Form(
-          key: _formKey,
+          key: formKey,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                  "Le code sera enregistré localement et synchronisé automatiquement dès le retour du réseau.",
-                  style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.4)
-              ),
-              const SizedBox(height: 20),
-              TextFormField(
-                controller: _newPassController,
-                obscureText: true,
-                keyboardType: TextInputType.number,
-                maxLength: 4,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
-                decoration: InputDecoration(
-                  labelText: "Nouveau code (4 chiffres)",
-                  prefixIcon: const Icon(Icons.lock_outline, size: 20),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                  counterText: "",
-                ),
-                validator: (v) => (v == null || v.length < 4) ? "4 chiffres requis" : null,
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _confirmPassController,
-                obscureText: true,
-                keyboardType: TextInputType.number,
-                maxLength: 4,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
-                decoration: InputDecoration(
-                  labelText: "Confirmer le code",
-                  prefixIcon: const Icon(Icons.gpp_good_outlined, size: 20),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                  counterText: "",
-                ),
-                validator: (v) {
-                  if (v == null || v.isEmpty) return "Confirmation requise";
-                  if (v != _newPassController.text) return "Les codes ne correspondent pas";
-                  return null;
-                },
-              ),
+              TextFormField(controller: newPassController, obscureText: true, keyboardType: TextInputType.number, maxLength: 4, decoration: const InputDecoration(labelText: "Nouveau code")),
+              TextFormField(controller: confirmPassController, obscureText: true, keyboardType: TextInputType.number, maxLength: 4, decoration: const InputDecoration(labelText: "Confirmer")),
             ],
           ),
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Annuler", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold))
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF9800),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))
-            ),
             onPressed: () async {
-              if (_formKey.currentState!.validate()) {
-                try {
-                  await _dbHelper.updateCustomerCodePinOffline(_userId!, _newPassController.text);
-                  await _refreshPendingCount();
-
-                  if (mounted) {
-                    Navigator.pop(context);
-                    _showSnackBar("Code enregistré ! Reconnexion requise. ✅", Colors.green);
-                    await _logout();
-                  }
-                } catch (e) {
-                  if (mounted) _showSnackBar("Erreur lors de l'enregistrement : $e", Colors.red);
+              if (formKey.currentState!.validate()) {
+                await _dbHelper.updateCustomerCodePinOffline(_userId!, newPassController.text);
+                if (mounted) {
+                  Navigator.pop(context);
+                  _logout();
                 }
               }
             },
-            child: const Text("ENREGISTRER", style: TextStyle(fontWeight: FontWeight.bold)),
+            child: const Text("ENREGISTRER"),
           )
         ],
       ),
@@ -219,41 +212,21 @@ class _HomeScreenState extends State<HomeScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
     if (mounted) {
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-            (route) => false,
-      );
+      Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (route) => false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isInitialSyncing) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator(color: Color(0xFFFF9800))));
-    }
+    if (_isInitialSyncing) return const Scaffold(body: Center(child: CircularProgressIndicator(color: Color(0xFFFF9800))));
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      appBar: AppBar(
-        title: const Text("TABLEAU DE BORD", style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 0,
-        actions: [IconButton(icon: const Icon(Icons.logout), onPressed: () => _logout())],
-      ),
+      appBar: AppBar(title: const Text("TABLEAU DE BORD", style: TextStyle(fontWeight: FontWeight.w900)), backgroundColor: Colors.white, foregroundColor: Colors.black, elevation: 0, actions: [IconButton(icon: const Icon(Icons.logout), onPressed: _logout)]),
       body: SafeArea(
         child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeader(),
-              const SizedBox(height: 30),
-              _buildMenuGrid(),
-            ],
-          ),
+          child: Column(children: [_buildHeader(), const SizedBox(height: 30), _buildMenuGrid()]),
         ),
       ),
     );
@@ -264,45 +237,42 @@ class _HomeScreenState extends State<HomeScreen> {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(color: const Color(0xFFFF9800), borderRadius: BorderRadius.circular(20)),
-      child: Row(
-        children: [
-          const CircleAvatar(radius: 30, backgroundColor: Colors.white24, child: Icon(Icons.person, size: 40, color: Colors.white)),
-          const SizedBox(width: 15),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text("Bonjour, ${_userName ?? 'Utilisateur'}", style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis),
-                Text("Profil : ${_userProfile ?? 'Non défini'}", style: const TextStyle(color: Colors.white70), overflow: TextOverflow.ellipsis),
-              ],
-            ),
-          ),
-        ],
-      ),
+      child: Row(children: [
+        const CircleAvatar(radius: 30, backgroundColor: Colors.white24, child: Icon(Icons.person, size: 40, color: Colors.white)),
+        const SizedBox(width: 15),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text("Bonjour, ${_userName ?? 'Utilisateur'}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), Text("Profil : ${_userProfile ?? 'Non défini'}", style: const TextStyle(color: Colors.white70))])),
+      ]),
     );
   }
 
   Widget _buildMenuGrid() {
-    return Column(
-      children: [
-        Row(
-          children: [
-            Expanded(child: _buildMenuCard("Commencer", "Mes structures", Icons.storefront_rounded, Colors.orange, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StructuresScreen())))),
-            const SizedBox(width: 15),
-            Expanded(child: _buildMenuCard("Sécurité", "Code PIN", Icons.lock_outline, Colors.purple, _showChangePasswordDialog)),
-          ],
-        ),
-        const SizedBox(height: 15),
-        Row(
-          children: [
-            Expanded(child: _buildMenuCard("Sync", _pendingSyncCount > 0 ? "$_pendingSyncCount en attente" : "À jour", Icons.sync, Colors.blue, _handleManualSync)),
-            const SizedBox(width: 15),
-            // ✅ FIX : Remplacement du Spacer() par un conteneur vide flexible pour équilibrer la grille de rendu
-            const Expanded(child: SizedBox.shrink()),
-          ],
-        ),
-      ],
-    );
+    bool isAdmin = _userProfile != null && _userProfile!.toLowerCase().contains("admin");
+
+    return Column(children: [
+      Row(children: [
+        Expanded(child: _buildMenuCard("Commencer", "Mes structures", Icons.storefront_rounded, Colors.orange, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StructuresScreen())).then((_) => _refreshPendingCount()))),
+        const SizedBox(width: 15),
+        Expanded(child: _buildMenuCard("Sécurité", "Code PIN", Icons.lock_outline, Colors.purple, _showChangePasswordDialog)),
+      ]),
+      const SizedBox(height: 15),
+      // Masque la carte de synchronisation si l'utilisateur est un administrateur
+      if (!isAdmin)
+        Row(children: [
+          Expanded(
+              child: _buildMenuCard(
+                  "Sync",
+                  _pendingSyncCount > 0
+                      ? "$_pendingSyncCount en attente"
+                      : "Dernière : $_lastSyncDateLabel",
+                  Icons.sync,
+                  Colors.blue,
+                  _handleManualSync
+              )
+          ),
+          const SizedBox(width: 15),
+          const Expanded(child: SizedBox.shrink()),
+        ]),
+    ]);
   }
 
   Widget _buildMenuCard(String title, String subtitle, IconData icon, Color color, VoidCallback onTap) {
@@ -315,15 +285,12 @@ class _HomeScreenState extends State<HomeScreen> {
           borderRadius: BorderRadius.circular(20),
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color, size: 24)),
-                const SizedBox(height: 15),
-                Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16), maxLines: 1, overflow: TextOverflow.ellipsis),
-                Text(subtitle, style: TextStyle(color: Colors.grey.shade600, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-              ],
-            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color, size: 24)),
+              const SizedBox(height: 15),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+              Text(subtitle, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+            ]),
           ),
         ),
       ),

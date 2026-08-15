@@ -225,6 +225,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         finalPassword = _generateRandomPin();
       }
 
+      // 🔍 LOG DU MOT DE PASSE POUR LES TESTS
+      debugPrint("🔑 [TEST LOG] Mot de passe / PIN généré pour $targetName : '$finalPassword'");
+
       final success = await userService.registerUser(
         targetName,
         targetPhone,

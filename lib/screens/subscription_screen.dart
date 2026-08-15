@@ -4,9 +4,14 @@ import '../models/subscription_plan.dart';
 import 'add_structure_screen.dart';
 
 class SubscriptionScreen extends StatefulWidget {
-  final int? filterPriorite;
+  final String? structureId;
+  final int? filterPriorite; // 🔹 Ajout du paramètre pour le filtrage par priorité
 
-  const SubscriptionScreen({super.key, this.filterPriorite});
+  const SubscriptionScreen({
+    super.key,
+    this.structureId,
+    this.filterPriorite,
+  });
 
   @override
   State<SubscriptionScreen> createState() => _SubscriptionScreenState();
@@ -27,7 +32,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F4F4),
       appBar: AppBar(
-        title: const Text("CHOISIR UN PLAN", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+        title: Text(
+          widget.structureId != null ? "RENOUVELER L'ABONNEMENT" : "CHOISIR UN PLAN",
+          style: const TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.2),
+        ),
         elevation: 0,
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
@@ -43,23 +51,29 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           if (snapshot.hasError) return Center(child: Text("Erreur : ${snapshot.error}"));
           if (!snapshot.hasData || snapshot.data!.isEmpty) return const Center(child: Text("Aucun plan disponible."));
 
-          // --- LOGIQUE DE FILTRAGE RENFORCÉE ---
           List<SubscriptionPlan> plans = snapshot.data!;
+
+          // 🔹 Filtrage des plans si filterPriorite est fourni
           if (widget.filterPriorite != null) {
-            plans = plans.where((p) {
-              // 1. Filtre Coût : doit être > 0
-              final num prix = num.tryParse(p.price.toString().replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-              final bool isCostValid = prix > 0;
-
-              // 2. Filtre Priorité : conversion forcée en int
-              final int planPriorite = int.tryParse(p.priorite.toString()) ?? 0;
-              final bool isPrioriteValid = planPriorite >= widget.filterPriorite!;
-
-              return isCostValid && isPrioriteValid;
+            plans = plans.where((plan) {
+              // Ajustez 'plan.priority' ou 'plan.priorite' selon le nom exact de la propriété dans votre modèle SubscriptionPlan
+              int planPriority = plan.priorite ?? 0;
+              return planPriority >= widget.filterPriorite!;
             }).toList();
           }
 
-          if (plans.isEmpty) return const Center(child: Text("Aucun plan disponible selon vos critères."));
+          if (plans.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20.0),
+                child: Text(
+                  "Aucun plan supérieur disponible pour le moment.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, color: Colors.grey, fontWeight: FontWeight.bold),
+                ),
+              ),
+            );
+          }
 
           return ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
@@ -79,10 +93,12 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   color: Colors.transparent,
                   child: InkWell(
                     borderRadius: BorderRadius.circular(16),
-                    onTap: () {
-                      if (widget.filterPriorite != null) {
-                        Navigator.pop(context, plan); // Retour au menu précédent avec le plan
+                    onTap: () async {
+                      if (widget.structureId != null || widget.filterPriorite != null) {
+                        // 🔹 Retourne le plan sélectionné à l'écran précédent
+                        Navigator.pop(context, plan);
                       } else {
+                        // 🔹 Cas de la création d'une nouvelle structure
                         Navigator.pop(context);
                         Navigator.push(context, MaterialPageRoute(builder: (context) => AddStructureScreen(plan: plan.name)));
                       }

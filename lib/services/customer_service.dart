@@ -8,37 +8,38 @@ class CustomerService {
   final String apiUrl = "$baseUrl/customer";
   final DatabaseHelper _dbHelper = DatabaseHelper();
 
-  // --- CRÉER UN CLIENT (AVEC GESTION OFFLINE) ---
   Future<Map<String, dynamic>?> createCustomer(Map<String, dynamic> customerData) async {
-    // 1. VRAIE vérification de la disponibilité du micro-service
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
-
+    print("🌐 Le NetworkChecker dit que le serveur est en ligne ? -> $serverIsUp");
     if (serverIsUp) {
       try {
+        print("🚀 Tentative d'envoi au serveur : ${jsonEncode(customerData)}");
+
         final response = await http.post(
           Uri.parse(apiUrl),
           headers: {"Content-Type": "application/json"},
           body: jsonEncode(customerData),
         ).timeout(const Duration(seconds: 5));
 
+        print("📥 Réponse du serveur (Code ${response.statusCode}) : ${response.body}");
+
         if (response.statusCode == 201 || response.statusCode == 200) {
           final savedCustomer = jsonDecode(response.body);
-          // On synchronise le local avec la réponse propre du serveur
           await _dbHelper.saveCustomerLocal(savedCustomer);
           return savedCustomer;
+        } else {
+          print("❌ Le serveur a refusé la requête avec le code : ${response.statusCode}");
         }
       } catch (e) {
-        print("⚠️ Serveur client injoignable, passage en mode local : $e");
+        print("🔥 EXCEPTION RÉSEAU / PARSING : $e"); // <-- C'est ici qu'on verra la vraie raison !
       }
     }
 
-    // 2. Mode Hors-ligne : Sauvegarde locale SQLite directe et silencieuse
-    print("🔄 Mode Offline : Sauvegarde du client en local...");
+    print("🔄 Fallback : Sauvegarde du client en local uniquement...");
     await _dbHelper.saveCustomerLocal(customerData);
     return customerData;
   }
 
-  // --- METTRE À JOUR UN CLIENT ---
   Future<Map<String, dynamic>?> updateCustomer(Map<String, dynamic> customerData) async {
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
 
@@ -134,5 +135,34 @@ class CustomerService {
       print("Erreur suppression client : $e");
       return false;
     }
+  }
+
+
+  Future<Map<String, dynamic>?> getCustomerByNumCust(String numCust) async {
+    final localCustomer = await _dbHelper.getCustomerByNumCustLocal(numCust);
+    if (localCustomer != null) {
+      print("📥 Client trouvé en local (SQLite)");
+      return localCustomer;
+    }
+
+    // 2. Si non trouvé en local, tenter le réseau si le serveur est accessible
+    bool serverIsUp = await NetworkChecker.isBackendAccessible();
+    if (serverIsUp) {
+      try {
+        final response = await http.get(
+          Uri.parse("$apiUrl/number/$numCust"),
+        ).timeout(const Duration(seconds: 5));
+
+        if (response.statusCode == 200) {
+          final customer = jsonDecode(response.body);
+          // Sauvegarder en local pour les prochaines fois
+          await _dbHelper.saveCustomerLocal(customer);
+          return customer;
+        }
+      } catch (e) {
+        print("⚠️ Erreur réseau recherche client par numéro $numCust : $e");
+      }
+    }
+    return null;
   }
 }

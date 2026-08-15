@@ -77,4 +77,29 @@ class DepenseService {
       return 0.0;
     }
   }
+  // 6. Récupérer les totaux des dépenses par jour pour un mois donné (Ex: period = "2026-07")
+  Future<Map<String, double>> getMonthlyDailyExpenses(String codeStructure, String yearMonth) async {
+    try {
+      final response = await http.get(
+        Uri.parse("$apiUrl/structure/$codeStructure/monthly-daily-expenses?period=$yearMonth"),
+      );
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = jsonDecode(response.body);
+        return data.map((key, value) => MapEntry(key, (value as num).toDouble()));
+      }
+      return {};
+    } catch (e) {
+      print("Erreur getMonthlyDailyExpenses: $e");
+      return {};
+    }
+  }
+
+  Future<List<dynamic>> getExpensesByUser(String structureId) async {
+    final response = await http.get(Uri.parse('$baseUrl/depense/structure/$structureId/by-user'));
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else {
+      throw Exception('Erreur lors de la récupération des dépenses par agent');
+    }
+  }
 }

@@ -1,9 +1,11 @@
+import 'package:fada/providers/cart_provider.dart';
 import 'package:fada/services/sync_service.dart';
 import 'package:fada/widgets/product_image_widget.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../services/structure_service.dart';
 import '../services/database/database_helper.dart';
+import '../services/network_checker.dart';
 import '../utils/constants.dart';
 import 'categories_screen.dart';
 import 'mon_espace_screen.dart';
@@ -41,32 +43,37 @@ class _StructuresScreenState extends State<StructuresScreen> {
 
   Future<void> fetchStructures() async {
     if (!mounted) return;
-    setState(() {
-      if (allStructures.isEmpty) {
-        isLoading = true;
-      } else {
-        isRefreshing = true;
-      }
-    });
+    setState(() => isRefreshing = true);
 
     try {
       final prefs = await SharedPreferences.getInstance();
       final String? userId = prefs.getString('userId');
+      if (userId == null) return;
 
-      if (userId == null) {
-        if (mounted) setState(() => isLoading = false);
-        return;
-      }
+      bool isAdmin = userProfile != null && userProfile!.toLowerCase().contains("admin");
 
-      try {
-        await _syncService.fullSynchronization("", userId);
-      } catch (apiError) {
-        debugPrint("🌐 Mode hors ligne (données locales utilisées) : $apiError");
+      if (isAdmin) {
+        debugPrint("👑 Profil Administrateur : Mode 100% online, pas de base locale pour les structures.");
+
+        if (await NetworkChecker.isBackendAccessible()) {
+          try {
+            await _syncService.fullSynchronization("", userId);
+          } catch (e) {
+            debugPrint("Erreur récupération online admin : $e");
+          }
+        }
+      } else {
+        try {
+          await _syncService.fullSynchronization("", userId);
+        } catch (apiError) {
+          debugPrint("🌐 Mode hors ligne : $apiError");
+        }
       }
 
       final List<Map<String, dynamic>> rawData = await _dbHelper.getLocalStructuresByUser(userId);
 
       final filteredData = rawData.where((s) {
+        debugPrint("🔍 Structure ID ${s['id']} | Nom: ${s['nomStructure']} | isActive: ${s['isActive']} (type: ${s['isActive'].runtimeType})");
         final dynamic activeField = s['active'] ?? s['isActive'];
         return (activeField == true || activeField.toString() == '1' || activeField.toString().toLowerCase() == 'true');
       }).toList();
@@ -79,13 +86,8 @@ class _StructuresScreenState extends State<StructuresScreen> {
         });
       }
     } catch (e) {
-      debugPrint("❌ Erreur critique structures : $e");
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-          isRefreshing = false;
-        });
-      }
+      debugPrint("❌ Erreur : $e");
+      if (mounted) setState(() { isLoading = false; isRefreshing = false; });
     }
   }
 
@@ -98,6 +100,8 @@ class _StructuresScreenState extends State<StructuresScreen> {
     await prefs.setString('codeStructure', structure['codeStructure'] ?? '');
 
     if (mounted) {
+      Provider.of<CartProvider>(context, listen: false).setStructure(idStr);
+
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -112,7 +116,7 @@ class _StructuresScreenState extends State<StructuresScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final bool canAccessAdmin = userProfile == "Administrateur" || userProfile == "Super admin";
+    final bool canAccessAdmin = userProfile != null && userProfile!.toLowerCase().contains("admin");
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -131,7 +135,6 @@ class _StructuresScreenState extends State<StructuresScreen> {
           ),
         ],
       ),
-      // APPLICATION DU SAFE AREA ICI
       body: SafeArea(
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 350),
@@ -195,7 +198,7 @@ class _StructuresScreenState extends State<StructuresScreen> {
             children: [
               Text("Bonjour,", style: TextStyle(color: Color(0xFF64748B), fontSize: 15)),
               SizedBox(height: 4),
-              Text("Gorez vos espaces", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B), letterSpacing: -0.5)),
+              Text("Gérez vos espaces", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B), letterSpacing: -0.5)),
             ],
           ),
           Container(
@@ -225,9 +228,9 @@ class _StructuresScreenState extends State<StructuresScreen> {
               child: Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey.shade400),
             ),
             const SizedBox(height: 24),
-            const Text("Aucun espace actif", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+            const Text("Aucun espace trouvé", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
             const SizedBox(height: 8),
-            const Text("Aucune structure active n'a été trouvée pour votre compte actuellement.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
+            const Text("Merci de vérifier votre connexion et de réessayer.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
             const SizedBox(height: 24),
             TextButton.icon(
               onPressed: isRefreshing ? null : fetchStructures,
@@ -241,7 +244,6 @@ class _StructuresScreenState extends State<StructuresScreen> {
       ),
     );
   }
-
 
   Widget _buildStructureCard(dynamic s) {
     final String localPath = s['photoPath'] ?? '';

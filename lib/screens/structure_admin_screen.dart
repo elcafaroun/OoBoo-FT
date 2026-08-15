@@ -1,20 +1,57 @@
 import 'package:flutter/material.dart';
 import 'package:fada/screens/user_list_screen.dart';
-import 'stock_alert_screen.dart'; // Assurez-vous que ce fichier est au même niveau
+import 'package:shared_preferences/shared_preferences.dart'; // 👈 AJOUTÉ pour accéder aux SharedPreferences
+import 'stock_alert_screen.dart';
 import '../services/depense_service.dart';
 import 'dashboard_screen.dart';
 import 'add_category_screen.dart';
 
-class StructureAdminScreen extends StatelessWidget {
+class StructureAdminScreen extends StatefulWidget {
   final String structureId;
   final String structureName;
-  final DepenseService _depenseService = DepenseService();
 
-  StructureAdminScreen({
+  const StructureAdminScreen({
     super.key,
     required this.structureId,
     required this.structureName,
   });
+
+  @override
+  State<StructureAdminScreen> createState() => _StructureAdminScreenState();
+}
+
+class _StructureAdminScreenState extends State<StructureAdminScreen> {
+  final DepenseService _depenseService = DepenseService();
+
+  // 👈 AJOUTÉ : Informations de l'utilisateur connecté
+  String _currentUserId = "admin_inconnu";
+  String _currentUserName = "Administrateur";
+  bool _isLoadingUser = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserInfo(); // 👈 AJOUTÉ : Charger les informations au démarrage
+  }
+
+  // 👈 AJOUTÉ : Charger l'ID et le Nom depuis SharedPreferences
+  Future<void> _loadUserInfo() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (mounted) {
+        setState(() {
+          _currentUserId = prefs.getString('userId') ?? 'admin_inconnu';
+          _currentUserName = prefs.getString('userName') ?? 'Administrateur';
+          _isLoadingUser = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("⚠️ Erreur lors du chargement des infos de l'admin : $e");
+      if (mounted) {
+        setState(() => _isLoadingUser = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +59,7 @@ class StructureAdminScreen extends StatelessWidget {
       backgroundColor: const Color(0xFFF9F7F2), // Fond très clair
       appBar: AppBar(
         title: Text(
-          structureName,
+          widget.structureName,
           style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
         ),
         backgroundColor: Colors.white,
@@ -33,7 +70,9 @@ class StructureAdminScreen extends StatelessWidget {
           child: Container(color: Colors.grey.withOpacity(0.2), height: 1.0),
         ),
       ),
-      body: SingleChildScrollView(
+      body: _isLoadingUser
+          ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+          : SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
         child: Column(
           children: [
@@ -47,7 +86,7 @@ class StructureAdminScreen extends StatelessWidget {
               color: const Color(0xFF546E7A),
               title: "Tableau de bord",
               subtitle: "Analyse et rapports",
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DashboardScreen(structureId: structureId))),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DashboardScreen(structureId: widget.structureId))),
             ),
             _buildMenuTile(
               context,
@@ -63,9 +102,9 @@ class StructureAdminScreen extends StatelessWidget {
               color: const Color(0xFFFB8C00),
               title: "Catégories",
               subtitle: "Gestion des rubriques",
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AddCategoryScreen(structureId: structureId))),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AddCategoryScreen(structureId: widget.structureId))),
             ),
-            // Ajout du module Stock
+            // Module Stock
             _buildMenuTile(
               context,
               icon: Icons.inventory_2_rounded,
@@ -106,7 +145,7 @@ class StructureAdminScreen extends StatelessWidget {
           const SizedBox(height: 15),
           const Text("Espace Administration", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 5),
-          Text("Gérez les opérations de $structureName", style: TextStyle(color: Colors.grey[600])),
+          Text("Gérez les opérations de ${widget.structureName}", style: TextStyle(color: Colors.grey[600])),
         ],
       ),
     );
@@ -203,13 +242,17 @@ class StructureAdminScreen extends StatelessWidget {
               ),
               onPressed: () async {
                 if (amountController.text.isNotEmpty && titleController.text.isNotEmpty) {
+                  // 👈 CONFIGURATION DU PAYLOAD AVEC LES INFOS DE L'AGENT CONNECTÉ
                   final depenseData = {
-                    "codeStructure": structureId,
-                    "amount": amountController.text,
-                    "intitule": titleController.text,
+                    "codeStructure": widget.structureId,
+                    "amount": amountController.text.trim(),
+                    "intitule": titleController.text.trim(),
                     "dateDepense": selectedDate.toIso8601String().split('T')[0],
-                    "createdBy": "Admin",
+                    "userId": _currentUserId,       // ID unique
+                    "userName": _currentUserName,   // Nom d'affichage
+                    "createdBy": _currentUserId,     // 👈 Stocke bien l'ID de l'admin connecté
                   };
+
                   bool success = await _depenseService.createDepense(depenseData);
                   if (success && context.mounted) {
                     Navigator.pop(context);

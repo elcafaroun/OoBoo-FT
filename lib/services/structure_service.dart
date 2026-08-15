@@ -6,7 +6,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import 'package:shared_preferences/shared_preferences.dart'; // ✅ Ajouté pour récupérer le userId local
+import 'package:shared_preferences/shared_preferences.dart';
 import 'network_checker.dart';
 
 class StructureService {
@@ -24,11 +24,11 @@ class StructureService {
   Future<void> createStructure(Map<String, dynamic> data, {File? imageFile}) async {
     String? localPath;
 
-    // 1️⃣ Récupération sécurisée du userId connecté pour l'association multi-structure (PB-M)
+    // 1️⃣ Récupération sécurisée du userId connecté
     final prefs = await SharedPreferences.getInstance();
     final String? userId = prefs.getString('userId');
     debugPrint("✅ [Login] userId récupéré du serveur : $userId");
-    // Verrou de sécurité : Évite l'envoi d'une requête incomplète au serveur
+
     if (userId == null || userId.trim().isEmpty) {
       debugPrint("❌ [StructureService] Erreur : 'userId' introuvable dans SharedPreferences.");
       throw Exception("Votre session d'authentification a expiré. Veuillez vous reconnecter.");
@@ -44,7 +44,6 @@ class StructureService {
     // 2️⃣ MODE ONLINE
     if (serverIsUp) {
       try {
-        // ✅ Mise à jour de l'URL pour passer l'userId requis par le Backend en Query Parameter
         final String finalUrl = '$baseUrl/structure?userId=${Uri.encodeComponent(userId.trim())}';
         debugPrint("📡 Envoi POST vers l'API : $finalUrl");
 
@@ -68,7 +67,6 @@ class StructureService {
     // 3️⃣ MODE OFFLINE : Sauvegarde dans la file d'attente locale SQFlite
     String entityId = (data['idStructure'] ?? data['id'] ?? "TEMP_${DateTime.now().millisecondsSinceEpoch}").toString();
 
-    // Insertion du userId créateur dans les données locales pour le traitement par le Worker de synchronisation
     data['createdUserId'] = userId.trim();
 
     await _dbHelper.addToSyncQueue(
@@ -98,7 +96,6 @@ class StructureService {
 
         if (response.statusCode == 200) {
           final dynamic data = jsonDecode(utf8.decode(response.bodyBytes));
-          // Gestion du format Liste attendu par l'UI
           List<dynamic> listData = data is List ? data : [data];
           await _dbHelper.syncStructuresLocal(listData);
           return listData;
@@ -108,7 +105,7 @@ class StructureService {
       }
     }
 
-    print("📥 Mode Offline : Récupération de la structure par code depuis SQLite");
+    debugPrint("📥 Mode Offline : Récupération de la structure par code depuis SQLite");
     final db = await _dbHelper.database;
     final List<Map<String, dynamic>> localData = await db.query(
       'structures',
@@ -145,14 +142,106 @@ class StructureService {
     return localData;
   }
 
-  /// 🔹 Mise à jour de la photo d'une structure existante
+
+  Future<bool> updateStructure(String id, Map<String, dynamic> data, {File? imageFile}) async {
+    String? localImagePath;
+
+    if (imageFile != null) {
+      localImagePath = await _saveImageLocally(imageFile);
+      data['photoPath'] = localImagePath;
+      data['structPhotoUrl'] = localImagePath;
+    }
+
+    bool serverIsUp = await NetworkChecker.isBackendAccessible();
+
+    if (serverIsUp) {
+      try {
+        final url = Uri.parse('$baseUrl/structure/$id');
+
+        // On utilise systématiquement MultipartRequest pour être synchro avec le backend
+        var request = http.MultipartRequest('PUT', url);
+
+        if (imageFile != null) {
+          var stream = http.ByteStream(imageFile.openRead());
+          var length = await imageFile.length();
+          request.files.add(http.MultipartFile('file', stream, length, filename: p.basename(imageFile.path)));
+        }
+
+        data.forEach((key, value) {
+          if (value != null) {
+            request.fields[key] = value.toString();
+          }
+        });
+
+        var streamedResponse = await request.send().timeout(const Duration(seconds: 15));
+        var response = await http.Response.fromStream(streamedResponse);
+
+        if (response.statusCode == 200 || response.statusCode == 204) {
+          Map<String, dynamic> responseData = data;
+          if (response.body.isNotEmpty) {
+            try {
+              final decodedBody = jsonDecode(utf8.decode(response.bodyBytes));
+              if (decodedBody is Map<String, dynamic>) {
+                responseData = decodedBody;
+              }
+            } catch (_) {}
+          }
+
+          Map<String, dynamic> cleanData = Map.from(responseData);
+          cleanData.remove('users');
+          cleanData.remove('userStructures');
+
+          final db = await _dbHelper.database;
+          await db.update(
+            'structures',
+            {
+              ...cleanData,
+              'lastUpdated': DateTime.now().toIso8601String(),
+            },
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          return true;
+        }
+      } catch (_) {}
+    }
+
+    try {
+      final db = await _dbHelper.database;
+      Map<String, dynamic> cleanData = Map.from(data);
+      cleanData.remove('users');
+      cleanData.remove('userStructures');
+
+      await db.update(
+        'structures',
+        {
+          ...cleanData,
+          'lastUpdated': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+
+      if (localImagePath != null) {
+        await _dbHelper.updateEntityPhotoPath('structures', id, localImagePath);
+      }
+
+      await _dbHelper.addToSyncQueue('UPDATE', 'structures', id, data);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+
+  /// 🔹 Mise à jour de la photo uniquement
   Future<void> updatePhoto(String structureId, File imageFile) async {
     String localPath = await _saveImageLocally(imageFile);
     await _dbHelper.updateEntityPhotoPath('structures', structureId, localPath);
 
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
     if (serverIsUp) {
-      debugPrint("📡 Connecté : Prêt pour la synchronisation Multipart ultérieure avec le backend.");
+      await updateStructure(structureId, {'id': structureId}, imageFile: imageFile);
     }
   }
 
@@ -242,7 +331,7 @@ class StructureService {
     return [];
   }
 
-  /// 🔹 Vérification de l'unicité d'un nom de structure (URL mise à jour)
+  /// 🔹 Vérification de l'unicité d'un nom de structure
   Future<bool> checkStructureNameExists(String nom) async {
     if (!(await NetworkChecker.isBackendAccessible())) {
       return false;
@@ -261,4 +350,64 @@ class StructureService {
     }
     return false;
   }
+
+  /// 🔹 Mise à jour du statut (Activé/Désactivé)
+  Future<void> updateStructureStatus(String id, bool isActive) async {
+    bool serverIsUp = await NetworkChecker.isBackendAccessible();
+
+    if (!serverIsUp) {
+      throw Exception("📡 Action impossible hors-ligne : La mise à jour du statut requiert une connexion.");
+    }
+
+    try {
+      final url = Uri.parse('$baseUrl/structure/updateStatus/$id');
+
+      final response = await http.patch(
+        url,
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"active": isActive}),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final db = await _dbHelper.database;
+        await db.update(
+          'structures',
+          {'isActive': isActive ? 1 : 0, 'lastUpdated': DateTime.now().toIso8601String()},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+        debugPrint("✅ Statut de la structure $id mis à jour avec succès.");
+      } else {
+        throw Exception("Erreur serveur : ${response.statusCode}");
+      }
+    } catch (e) {
+      debugPrint("❌ Erreur lors de la mise à jour du statut : $e");
+      throw Exception("Impossible de mettre à jour le statut : $e");
+    }
+  }
+
+
+  Future<String> uploadPhoto(String idProduit, File imageFile) async {
+    if (!(await NetworkChecker.isBackendAccessible())) {
+      throw Exception('📡 Téléversement impossible : Mode hors-ligne actif.');
+    }
+
+    try {
+      final url = Uri.parse("$baseUrl/structure/photo");
+      final request = http.MultipartRequest('PUT', url)
+        ..fields['id'] = idProduit
+        ..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
+
+      final response = await request.send().timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        return await response.stream.bytesToString();
+      } else {
+        throw Exception("Erreur upload photo : Code statut ${response.statusCode}");
+      }
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+
 }

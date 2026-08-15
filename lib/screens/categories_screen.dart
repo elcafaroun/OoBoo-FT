@@ -3,6 +3,7 @@ import 'package:fada/screens/scanner_screen.dart';
 import 'package:fada/services/network_checker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/category_service.dart';
 import '../services/product_service.dart';
 import '../services/database/database_helper.dart';
@@ -23,7 +24,7 @@ class CategoriesScreen extends StatefulWidget {
 }
 
 class _CategoriesScreenState extends State<CategoriesScreen> {
-  int _alertCount = 0; // <--- AJOUTEZ CETTE LIGNE
+  int _alertCount = 0;
 
   final CategoryService _categoryService = CategoryService();
   final ProductService _productService = ProductService();
@@ -36,6 +37,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
   String selectedCategoryId = "TOUS";
   bool isLoading = true;
+  String? userProfile;
 
   @override
   void initState() {
@@ -51,15 +53,80 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   Future<void> _loadData() async {
+    final prefs = await SharedPreferences.getInstance();
+    userProfile = prefs.getString('userProfile');
+    final String profileLower = userProfile?.toLowerCase() ?? '';
+    bool isAdminOrSuperAdmin = profileLower.contains("admin") || profileLower.contains("super_admin") || profileLower.contains("super admin");
+
+    if (isAdminOrSuperAdmin) {
+      debugPrint("👑 Profil Admin/Super Admin : Vérification de la connexion requise.");
+
+      bool isOnline = false;
+      try {
+        isOnline = await NetworkChecker.isBackendAccessible();
+      } catch (e) {
+        debugPrint("❌ Erreur de vérification réseau : $e");
+      }
+
+      if (!isOnline) {
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+            categories = [];
+            allProducts = [];
+            filteredProducts = [];
+            _alertCount = 0;
+          });
+        }
+        return;
+      }
+
+      try {
+        final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId);
+        final remoteProds = await _productService.getProductsByStructure(widget.structureId);
+
+        // Pour les admins en ligne, on peut synchroniser temporairement ou calculer directement sur les produits distants
+        // Si _dbHelper gère l'enregistrement, ou si vous préférez utiliser getProductsInAlert après sync :
+        await _dbHelper.syncCategoriesLocal(remoteCats);
+        await _dbHelper.syncProductsLocal(remoteProds);
+        final adminAlerts = await _dbHelper.getProductsInAlert(widget.structureId);
+
+        if (mounted) {
+          setState(() {
+            categories = remoteCats;
+            allProducts = remoteProds;
+            filteredProducts = remoteProds;
+            _alertCount = adminAlerts.length;
+            isLoading = false;
+          });
+        }
+        return;
+      } catch (e) {
+        debugPrint("❌ Erreur chargement online admin/super admin : $e");
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+            categories = [];
+            allProducts = [];
+            filteredProducts = [];
+            _alertCount = 0;
+          });
+        }
+        return;
+      }
+    }
+
+    // Comportement standard (Non-admin) : Chargement local d'abord puis tentative de synchro
     final localCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
     final localProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
+    final localAlerts = await _dbHelper.getProductsInAlert(widget.structureId);
 
     if (mounted) {
       setState(() {
         categories = localCats;
         allProducts = localProds;
         filteredProducts = localProds;
-        _alertCount = localProds.where((p) => (p['productQte'] ?? 0) <= 5).length;
+        _alertCount = localAlerts.length;
         isLoading = false;
       });
     }
@@ -73,11 +140,13 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
         final updatedCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
         final updatedProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
+        final updatedAlerts = await _dbHelper.getProductsInAlert(widget.structureId);
 
         if (mounted && updatedCats.isNotEmpty) {
           setState(() {
             categories = updatedCats;
             allProducts = updatedProds;
+            _alertCount = updatedAlerts.length;
             _onSearchChanged();
           });
         }
@@ -130,37 +199,94 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final String profileLower = userProfile?.toLowerCase() ?? '';
+    bool isAdminOrSuperAdmin = profileLower.contains("admin") || profileLower.contains("super_admin") || profileLower.contains("super admin");
+
+    bool isOfflineAdmin = isAdminOrSuperAdmin && !isLoading && categories.isEmpty && allProducts.isEmpty;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF9F7F2),
       appBar: AppBar(
-        title: const Text(""), // Vide pour libérer l'espace
         backgroundColor: Colors.white,
         elevation: 0,
-        actions: [
+        centerTitle: true,
+        iconTheme: const IconThemeData(color: Color(0xFF1E293B)),
+        title: const Text(
+          "Articles",
+          style: TextStyle(
+            color: Color(0xFF1E293B),
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.3,
+          ),
+        ),
+        actions: isOfflineAdmin
+            ? null
+            : [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
             child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 _buildActionButton(Icons.qr_code_scanner, _scanAndFindProduct),
-                const SizedBox(width: 20),
+                const SizedBox(width: 16),
                 _buildActionButton(Icons.receipt_long_outlined, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen()))),
-                const SizedBox(width: 20),
+                const SizedBox(width: 16),
                 _buildCartBadge(),
+                const SizedBox(width: 16),
+                IconButton(
+                  icon: const Icon(Icons.home_rounded, color: Color(0xFFFF9800), size: 26),
+                  onPressed: () => Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const OrdersScreen()),
+                        (r) => false,
+                  ),
+                ),
               ],
             ),
           ),
         ],
       ),
       body: SafeArea(
-        child: Column(
+        child: isLoading
+            ? const Center(child: CircularProgressIndicator(color: Colors.orange))
+            : isOfflineAdmin
+            ? Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(color: Colors.grey.shade100, shape: BoxShape.circle),
+                  child: Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey.shade400),
+                ),
+                const SizedBox(height: 24),
+                const Text("Connexion requise", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                const SizedBox(height: 8),
+                const Text("En tant qu'administrateur, veuillez vérifier votre connexion internet pour accéder à cet espace.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
+                const SizedBox(height: 24),
+                TextButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      isLoading = true;
+                    });
+                    _loadData();
+                  },
+                  icon: const Icon(Icons.refresh_rounded, color: Color(0xFFFF9800)),
+                  label: const Text("Réessayer", style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
+        )
+            : Column(
           children: [
-            _buildStructureHeader(), // Nom de la structure sous l'AppBar
+            _buildStructureHeader(),
             _buildSearchBar(),
             _buildCategoryList(),
             Expanded(
-              child: isLoading
-                  ? const Center(child: CircularProgressIndicator(color: Colors.orange))
-                  : _buildProductGrid(),
+              child: _buildProductGrid(),
             ),
           ],
         ),
@@ -171,7 +297,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   Widget _buildStructureHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      // Le container prend toute la largeur
       width: double.infinity,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -185,7 +310,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         ),
         child: Row(
           children: [
-            // Nom de la structure avec icône
             const Icon(Icons.storefront, color: Colors.orange, size: 22),
             const SizedBox(width: 10),
             Expanded(
@@ -195,13 +319,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-
-            // Nouvelles icônes ajoutées ici
             IconButton(
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
               icon: Badge(
-                isLabelVisible: _alertCount > 0, // Assurez-vous de calculer cette variable
+                isLabelVisible: _alertCount > 0,
                 label: Text("$_alertCount"),
                 backgroundColor: Colors.red,
                 child: const Icon(Icons.notifications_outlined, color: Colors.black54, size: 22),
@@ -220,7 +342,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
               icon: const Icon(Icons.chat_bubble_outline, color: Colors.black54, size: 22),
-              onPressed: () { /* TODO: Logique chat */ },
+              onPressed: () {},
             ),
           ],
         ),

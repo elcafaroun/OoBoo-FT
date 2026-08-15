@@ -302,11 +302,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // ✅ Sécurisé : On sauvegarde à nouveau 'userProfile' dans SharedPreferences pour les autres écrans
   Future<void> _saveSession(SharedPreferences prefs, Map<String, dynamic> data, String codeStructure) async {
+    print(data);
     await prefs.setString('userId', data['id'].toString());
     await prefs.setString('userName', data['userName'] ?? '');
     await prefs.setString('userProfile', data['userProfile'] ?? 'SUPER_ADMIN'); // 🔐 Sauvegardé ici !
     await prefs.setString('codeStructure', codeStructure);
     await prefs.setString('selected_structure_id', codeStructure);
+    await prefs.setString('last_sync_date', data['updatedAt'] ?? 'Jamais');
     if (data['structures'] != null) {
       await prefs.setString('cached_user_structures', jsonEncode(data['structures']));
     }

@@ -27,6 +27,8 @@ dependencies:
   sqflite: ^2.3.0          # Gestion de la base locale
   path: ^1.9.0
   mobile_scanner: ^5.1.1
+  cached_network_image: ^3.3.1
+  bcrypt: ^1.2.0
   # Utile pour définir le chemin de la base de données
 
 dev_dependencies:

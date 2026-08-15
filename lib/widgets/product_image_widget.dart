@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 class ProductImageWidget extends StatelessWidget {
   final String? localPath;
@@ -19,47 +20,69 @@ class ProductImageWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Vérification du fichier local de manière persistante
+    // 1. Vérification du fichier local
     final bool hasLocalFile = localPath != null &&
         localPath!.isNotEmpty &&
         localPath != "null" &&
         File(localPath!).existsSync();
 
+    // 2. Vérification de l'URL réseau
+    final bool hasNetworkUrl = networkUrl.isNotEmpty &&
+        networkUrl != "null" &&
+        networkUrl.startsWith("http");
+
     Widget content;
 
     if (hasLocalFile) {
-      content = Image.file(File(localPath!), fit: BoxFit.cover);
-    } else if (networkUrl.isNotEmpty && networkUrl != "null") {
-      content = Image.network(
-        networkUrl,
+      // 💡 Astuce radicale : On vide explicitement le cache de l'image locale
+      // pour obliger Flutter à recharger physiquement le fichier du disque à chaque affichage.
+      final file = File(localPath!);
+      final fileImage = FileImage(file);
+      fileImage.evict(); // Supprime l'ancienne image du cache Flutter
+
+      content = Image(
+        image: fileImage,
         fit: BoxFit.cover,
-        // frameBuilder est la clé : il permet de conserver l'image précédente
-        // ou d'afficher le contenu sans "saut" brutal lors du chargement.
-        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-          if (wasSynchronouslyLoaded) return child;
-          return frame != null
-              ? child
-              : const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)));
-        },
-        errorBuilder: (_, __, ___) => Container(
-          color: Colors.grey[100],
-          child: const Icon(Icons.image_not_supported, color: Colors.grey),
+        errorBuilder: (_, __, ___) => _buildErrorPlaceholder(),
+      );
+    } else if (hasNetworkUrl) {
+      content = CachedNetworkImage(
+        imageUrl: networkUrl,
+        cacheKey: networkUrl, // Force le rafraîchissement si l'URL change
+        fit: BoxFit.cover,
+        placeholder: (context, url) => const Center(
+          child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2)
+          ),
         ),
+        errorWidget: (context, url, error) => _buildErrorPlaceholder(),
       );
     } else {
-      content = Container(
-        color: Colors.grey[100],
-        child: const Icon(Icons.photo_size_select_actual_outlined, color: Colors.grey),
-      );
+      content = _buildErrorPlaceholder();
     }
 
     // Application du clip et des dimensions
-    return SizedBox(
+    final Widget container = SizedBox(
       width: width ?? double.infinity,
       height: height ?? double.infinity,
       child: borderRadius != null
           ? ClipRRect(borderRadius: borderRadius!, child: content)
           : content,
+    );
+
+    // Retourner le conteneur enveloppé dans un KeyedSubtree unique basé sur le chemin et la date du fichier
+    return KeyedSubtree(
+      key: ValueKey("${localPath ?? ''}_${hasLocalFile ? File(localPath!).lastModifiedSync().millisecondsSinceEpoch : 0}_$networkUrl"),
+      child: container,
+    );
+  }
+
+  Widget _buildErrorPlaceholder() {
+    return Container(
+      color: Colors.grey[100],
+      child: const Icon(Icons.image_not_supported, color: Colors.grey),
     );
   }
 }

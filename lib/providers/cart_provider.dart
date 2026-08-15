@@ -5,7 +5,7 @@ class CartItem {
   final String name;
   final String imageUrl;
   final double price;
-  final int quantity; // ✅ 'quantity' passé en final pour l'immutabilité
+  final int quantity;
 
   CartItem({
     required this.id,
@@ -17,20 +17,39 @@ class CartItem {
 }
 
 class CartProvider with ChangeNotifier {
-  final Map<String, CartItem> _items = {};
+  // Clé principale = structureId, Clé secondaire = productId
+  final Map<String, Map<String, CartItem>> _structuresCarts = {};
 
-  // ✅ Retourne une copie de la Map pour éviter les modifications externes imprévues
-  Map<String, CartItem> get items => Map.from(_items);
+  String _currentStructureId = "1";
 
-  int get itemCount => _items.length;
+  void setStructure(String structureId) {
+    if (_currentStructureId != structureId) {
+      _currentStructureId = structureId;
+      notifyListeners();
+    }
+  }
+
+  Map<String, CartItem> get items {
+    return Map.from(_structuresCarts[_currentStructureId] ?? {});
+  }
+
+  // ✅ Correction : Compte la quantité totale de tous les articles dans le panier
+  int get itemCount {
+    return items.values.fold(0, (sum, item) => sum + item.quantity);
+  }
+
+  // ✅ Correction alternative si tu voulais le nombre de lignes distinctes, garde _items.length.
+  // Mais pour un badge de panier, on additionne généralement les quantités.
 
   double get totalAmount {
-    return _items.values.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
+    return items.values.fold(0.0, (sum, item) => sum + (item.price * item.quantity));
   }
 
   void addItem(String productId, String name, double price, String imageUrl, int quantity) {
-    if (_items.containsKey(productId)) {
-      _items.update(
+    final cart = _structuresCarts.putIfAbsent(_currentStructureId, () => {});
+
+    if (cart.containsKey(productId)) {
+      cart.update(
         productId,
             (existing) => CartItem(
           id: existing.id,
@@ -41,7 +60,7 @@ class CartProvider with ChangeNotifier {
         ),
       );
     } else {
-      _items[productId] = CartItem(
+      cart[productId] = CartItem(
         id: productId,
         name: name,
         imageUrl: imageUrl,
@@ -53,10 +72,11 @@ class CartProvider with ChangeNotifier {
   }
 
   void removeSingleItem(String productId) {
-    if (!_items.containsKey(productId)) return;
+    final cart = _structuresCarts[_currentStructureId];
+    if (cart == null || !cart.containsKey(productId)) return;
 
-    if (_items[productId]!.quantity > 1) {
-      _items.update(
+    if (cart[productId]!.quantity > 1) {
+      cart.update(
         productId,
             (existing) => CartItem(
           id: existing.id,
@@ -67,13 +87,13 @@ class CartProvider with ChangeNotifier {
         ),
       );
     } else {
-      _items.remove(productId);
+      cart.remove(productId);
     }
     notifyListeners();
   }
 
   void clearCart() {
-    _items.clear();
+    _structuresCarts[_currentStructureId]?.clear();
     notifyListeners();
   }
 }

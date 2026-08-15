@@ -22,11 +22,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Future<void> _fetchAlerts() async {
-    final allProducts = await _dbHelper.getProductsByStructureLocal(widget.structureId);
-    setState(() {
-      _alerts = allProducts.where((p) => (p['productQte'] ?? 0) <= 5).toList();
-      _isLoading = false;
-    });
+    try {
+      final alertProducts = await _dbHelper.getProductsInAlert(widget.structureId);
+
+      debugPrint('########: ${widget.structureId}');
+
+      if (mounted) {
+        setState(() {
+          _alerts = alertProducts;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Erreur lors de la récupération des alertes : $e");
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override
@@ -34,7 +46,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF9F9F9),
       appBar: AppBar(
-        title: const Text("Notifications", style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.w600)),
+        title: Text(
+          "Notifications (${_alerts.length})", // 👈 Optionnel : Afficher aussi le nombre dans le titre
+          style: const TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.w600),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.black),
@@ -42,7 +57,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Colors.black))
-          : Column( // Changement : on utilise une Column pour ajouter le message en haut
+          : Column(
         children: [
           if (_alerts.isNotEmpty)
             Container(
@@ -53,14 +68,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.orange.withOpacity(0.3)),
               ),
-              child: const Row(
+              child: Row(
                 children: [
-                  Icon(Icons.info_outline, color: Colors.orange, size: 20),
-                  SizedBox(width: 12),
+                  const Icon(Icons.info_outline, color: Colors.orange, size: 20),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      "Ces produits sont en alerte. Merci de contacter le responsable.",
-                      style: TextStyle(color: Colors.orange, fontWeight: FontWeight.w600, fontSize: 13),
+                      // 🔍 Message dynamique affichant le nombre exact de produits
+                      "${_alerts.length} ${_alerts.length > 1 ? 'produits sont en alerte' : 'produit est en alerte'}. Merci de contacter le responsable.",
+                      style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w600, fontSize: 13),
                     ),
                   ),
                 ],
@@ -90,7 +106,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       ),
       child: Row(
         children: [
-          // Indicateur visuel discret
           Container(width: 4, height: 24, color: Colors.orange),
           const SizedBox(width: 16),
           Expanded(
@@ -107,9 +122,5 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ],
       ),
     );
-  }
-
-  Widget _buildEmptyState() {
-    return const Center(child: Text("Aucune alerte, tout est en ordre.", style: TextStyle(color: Colors.grey)));
   }
 }

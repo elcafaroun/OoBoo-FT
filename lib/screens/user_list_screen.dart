@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 import '../services/user_service.dart';
 import 'register_screen.dart';
 
@@ -51,6 +52,17 @@ class _UserListScreenState extends State<UserListScreen> {
     }
   }
 
+  // Méthode utilitaire pour formater la date venant de l'API
+  String _formatSyncDate(dynamic syncDate) {
+    if (syncDate == null) return "Jamais";
+    try {
+      DateTime dateTime = DateTime.parse(syncDate.toString());
+      return DateFormat('dd/MM à HH:mm').format(dateTime);
+    } catch (e) {
+      return "Date invalide";
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -60,12 +72,7 @@ class _UserListScreenState extends State<UserListScreen> {
         backgroundColor: Colors.white,
         elevation: 0.5,
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh, color: Colors.orange),
-            onPressed: _fetchUsers,
-          )
-        ],
+        actions: [IconButton(icon: const Icon(Icons.refresh, color: Colors.orange), onPressed: _fetchUsers)],
       ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator(color: Colors.orange))
@@ -89,10 +96,7 @@ class _UserListScreenState extends State<UserListScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const RegisterScreen(isFromLogin: false))
-        ).then((_) => _fetchUsers()),
+        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterScreen(isFromLogin: false))).then((_) => _fetchUsers()),
         backgroundColor: const Color(0xFFFF9800),
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text("Ajouter un agent", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
@@ -104,11 +108,7 @@ class _UserListScreenState extends State<UserListScreen> {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))],
-      ),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 4))]),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
@@ -121,58 +121,69 @@ class _UserListScreenState extends State<UserListScreen> {
   }
 
   Widget _statTile(String label, String value, IconData icon, Color color) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 24),
-        const SizedBox(height: 8),
-        Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-      ],
-    );
+    return Column(children: [Icon(icon, color: color, size: 24), const SizedBox(height: 8), Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey))]);
   }
 
   Widget _buildAgentCard(dynamic user) {
     final dynamic activeField = user['active'] ?? user['isActive'];
     final bool isActive = activeField == true || activeField == 1 || activeField.toString().toLowerCase() == 'true';
-    final String displayName = user['userName'] ?? user['name'] ?? user['username'] ?? "Agent sans nom";
+    final String displayName = user['userName'] ?? user['name'] ?? "Agent sans nom";
     final String displayProfile = user['userProfile'] ?? user['profile'] ?? "Vente";
 
+    // Récupération de la date depuis l'objet user (backend)
+    final String lastSync = _formatSyncDate(user['lastSyncDate']);
+
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.withOpacity(0.1)),
-      ),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.withOpacity(0.1))),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: CircleAvatar(
-          backgroundColor: isActive ? Colors.orange.shade50 : Colors.grey.shade100,
-          child: Text(
-            displayName.isNotEmpty ? displayName[0].toUpperCase() : "?",
-            style: TextStyle(color: isActive ? Colors.orange : Colors.grey, fontWeight: FontWeight.bold),
-          ),
-        ),
+        leading: CircleAvatar(backgroundColor: isActive ? Colors.orange.shade50 : Colors.grey.shade100, child: Text(displayName[0].toUpperCase(), style: TextStyle(color: isActive ? Colors.orange : Colors.grey, fontWeight: FontWeight.bold))),
         title: Text(displayName, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(displayProfile, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(displayProfile, style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+            Text("Synchro : $lastSync", style: const TextStyle(fontSize: 10, color: Colors.blueGrey, fontStyle: FontStyle.italic)),
+          ],
+        ),
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
           onSelected: (value) async {
-            if (value == 'toggle') {
-              try {
-                await _userService.toggleUserStatus(user['id'], !isActive);
-                _fetchUsers();
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Erreur lors de la mise à jour")),
-                );
-              }
+            if (value == 'edit') {
+              // Action de modification (Rediriger par exemple vers l'écran Register en mode édition)
+              // Navigator.push(context, MaterialPageRoute(builder: (_) => RegisterScreen(user: user, isFromLogin: false))).then((_) => _fetchUsers());
+            } else if (value == 'toggle') {
+              await _userService.toggleUserStatus(user['id'], !isActive);
+              _fetchUsers();
             }
           },
           itemBuilder: (context) => [
-            const PopupMenuItem(value: 'edit', child: Text("Modifier")),
+            const PopupMenuItem(
+              value: 'edit',
+              child: Row(
+                children: [
+                  Icon(Icons.edit, color: Colors.blue, size: 20),
+                  SizedBox(width: 8),
+                  Text("Modifier"),
+                ],
+              ),
+            ),
             PopupMenuItem(
-                value: 'toggle',
-                child: Text(isActive ? "Désactiver l'agent" : "Activer l'agent")
+              value: 'toggle',
+              child: Row(
+                children: [
+                  Icon(
+                      isActive ? Icons.block : Icons.check_circle_outline,
+                      color: isActive ? Colors.red : Colors.green,
+                      size: 20
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    isActive ? "Désactiver l'agent" : "Activer l'agent",
+                    style: TextStyle(color: isActive ? Colors.red : Colors.green),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -180,16 +191,5 @@ class _UserListScreenState extends State<UserListScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.person_search, size: 80, color: Colors.grey.shade300),
-          const SizedBox(height: 16),
-          const Text("Aucun agent trouvé", style: TextStyle(color: Colors.grey)),
-        ],
-      ),
-    );
-  }
+  Widget _buildEmptyState() => Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.person_search, size: 80, color: Colors.grey.shade300), const Text("Aucun agent trouvé", style: TextStyle(color: Colors.grey))]));
 }
