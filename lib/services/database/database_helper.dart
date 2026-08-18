@@ -102,6 +102,12 @@ class DatabaseHelper {
     typeStructure TEXT
   )
 ''');
+    await db.execute('''
+    CREATE TABLE app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )
+  ''');
     await db
         .execute('CREATE INDEX idx_struct_user ON structures (createdUserId)');
     await db.execute(
@@ -846,4 +852,34 @@ class DatabaseHelper {
     await batch.commit(noResult: true);
     debugPrint("✅ [DB] ${customers.length} clients synchronisés.");
   }
+
+
+
+// 3. Ajouter les méthodes de lecture et écriture de la variable
+  Future<bool> getSettingBool(String key, {bool defaultValue = false}) async {
+    final db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'app_settings',
+      where: 'key = ?',
+      whereArgs: [key],
+      limit: 1,
+    );
+    if (maps.isNotEmpty) {
+      return maps.first['value'] == 'true' || maps.first['value'] == '1';
+    }
+    return defaultValue;
+  }
+
+  Future<void> setSettingBool(String key, bool value) async {
+    final db = await database;
+    await db.insert(
+      'app_settings',
+      {
+        'key': key,
+        'value': value ? '1' : '0',
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
 }

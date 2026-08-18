@@ -41,15 +41,34 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
+      // Extraction de l'ID de structure si disponible
+      final String structureId = (structures.isNotEmpty && structures.first['id'] != null)
+          ? structures.first['id'].toString()
+          : codeStructure;
+
       if (structures.isEmpty && codeStructure.isEmpty) {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const SubscriptionScreen()));
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => SubscriptionScreen(
+              structureId: structureId,
+
+            ),
+          ),
+        );
       } else {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const HomeScreen()));
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
       }
     } catch (e) {
       debugPrint('⚠️ Erreur de pré-chargement des structures (Bascule locale automatique) : $e');
       if (!mounted) return;
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const HomeScreen()));
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+      );
     }
   }
 
@@ -133,7 +152,7 @@ class _LoginScreenState extends State<LoginScreen> {
             'userName': userData['userName'] ?? loginValue,
             'userEmail': userData['userEmail'],
             'userPhone': userData['userPhone'],
-            'userProfile': profileValue, // ✅ Conservé pour le reste de ton application
+            'userProfile': profileValue,
             'codeStructure': codeStructure,
             'codeUser': serverCodeUser.isNotEmpty ? serverCodeUser : passwordValue,
             'isActive': 1,
@@ -186,18 +205,18 @@ class _LoginScreenState extends State<LoginScreen> {
             'userName': userData['userName'] ?? login,
             'userEmail': userData['userEmail'],
             'userPhone': userData['userPhone'],
-            'userProfile': profileValue, // ✅ Préservé lors de la sync
+            'userProfile': profileValue,
             'codeStructure': codeStructure,
             'codeUser': userData['codeUser'] ?? password,
             'isActive': 1,
             'updatedAt': DateTime.now().toIso8601String(),
           };
           await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
-          debugPrint("🔄 [Sync Arrière-plan] Données utilisateur (avec profil) synchronisées.");
+          debugPrint("🔄 [Sync Arrière-plan] Données utilisateur synchronisées.");
         }
       }
     } catch (e) {
-      debugPrint("⚠️ [Sync Arrière-plan] Échec silencieux de la mise à jour : $e");
+      debugPrint("⚠️ [Sync Arrière-plan] Échec silencieux : $e");
     }
   }
 
@@ -265,9 +284,9 @@ class _LoginScreenState extends State<LoginScreen> {
               actions: [
                 SizedBox(
                   width: double.infinity,
-                  height: 50,
+                  height: 48,
                   child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
                     onPressed: _isDialogLoading ? null : () async {
                       if (!_dialogFormKey.currentState!.validate()) return;
                       setDialogState(() => _isDialogLoading = true);
@@ -289,7 +308,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         _showSnackBar('Erreur lors de la mise à jour ❌', Colors.red);
                       }
                     },
-                    child: _isDialogLoading ? const CircularProgressIndicator(color: Colors.white) : const Text("VALIDER MON NOUVEAU PIN"),
+                    child: _isDialogLoading ? const CircularProgressIndicator(color: Colors.white) : const Text("VALIDER MON NOUVEAU PIN", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ],
@@ -300,12 +319,10 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  // ✅ Sécurisé : On sauvegarde à nouveau 'userProfile' dans SharedPreferences pour les autres écrans
   Future<void> _saveSession(SharedPreferences prefs, Map<String, dynamic> data, String codeStructure) async {
-    print(data);
     await prefs.setString('userId', data['id'].toString());
     await prefs.setString('userName', data['userName'] ?? '');
-    await prefs.setString('userProfile', data['userProfile'] ?? 'SUPER_ADMIN'); // 🔐 Sauvegardé ici !
+    await prefs.setString('userProfile', data['userProfile'] ?? 'SUPER_ADMIN');
     await prefs.setString('codeStructure', codeStructure);
     await prefs.setString('selected_structure_id', codeStructure);
     await prefs.setString('last_sync_date', data['updatedAt'] ?? 'Jamais');
@@ -322,36 +339,117 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            Container(
-              height: 300,
-              width: double.infinity,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(colors: [Colors.orange, Color(0xFFFF8C00)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                borderRadius: BorderRadius.only(bottomLeft: Radius.circular(80)),
-              ),
-              child: const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.business_center, size: 80, color: Colors.white),
-                  SizedBox(height: 10),
-                  Text("PB-M", style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1.5)),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 440),
+              padding: const EdgeInsets.all(24.0),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(color: Colors.grey.shade200, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                  ),
                 ],
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(24.0),
               child: Form(
                 key: _formKey,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text("Connexion", style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 30),
-                    _buildTextField(controller: _loginController, label: "Identifiant", icon: Icons.person_outline_rounded),
-                    const SizedBox(height: 20),
+                    // 🏢 Badge SaaS Header
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(
+                                color: Colors.orange,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            const Text(
+                              "ESPACE SÉCURISÉ SaaS",
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.orange,
+                                letterSpacing: 1.0,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    // 🏷️ Logo & Nom de la marque
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.1),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.business_center_rounded,
+                            size: 40,
+                            color: Colors.orange,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          "POKIBOO",
+                          style: TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFF1E293B),
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          "Connectez-vous à votre tableau de bord",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 22),
+                    const Divider(color: Color(0xFFF1F5F9), thickness: 1),
+                    const SizedBox(height: 16),
+
+                    // 📝 Champs du Formulaire
+                    _buildTextField(
+                      controller: _loginController,
+                      label: "Identifiant",
+                      icon: Icons.person_outline_rounded,
+                    ),
+                    const SizedBox(height: 14),
                     _buildTextField(
                       controller: _passwordController,
                       label: "Code PIN (4 chiffres)",
@@ -362,20 +460,39 @@ class _LoginScreenState extends State<LoginScreen> {
                       keyboardType: TextInputType.number,
                       isNumericPin: true,
                     ),
-                    const SizedBox(height: 30),
+
+                    const SizedBox(height: 24),
+
+                    // 🔘 Bouton Connexion Compact
                     _isLoading
                         ? const Center(child: CircularProgressIndicator(color: Colors.orange))
                         : SizedBox(
                       width: double.infinity,
-                      height: 55,
+                      height: 46,
                       child: ElevatedButton(
                         onPressed: _login,
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
-                        child: const Text("SE CONNECTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.login_rounded, color: Colors.white, size: 16),
+                            SizedBox(width: 8),
+                            Text(
+                              "SE CONNECTER",
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 25),
 
+                    const SizedBox(height: 16),
+
+                    // Liens bas de page
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -386,12 +503,11 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: TextButton.styleFrom(padding: EdgeInsets.zero),
                           child: const Text(
                             "Code PIN oublié ?",
-                            style: TextStyle(color: Colors.black54, fontSize: 14, fontWeight: FontWeight.w600),
+                            style: TextStyle(color: Color(0xFF64748B), fontSize: 12, fontWeight: FontWeight.w600),
                           ),
                         ),
                         TextButton(
                           onPressed: () {
-                            // ✅ Mis en adéquation avec le paramètre attendu par le constructeur
                             Navigator.push(
                               context,
                               MaterialPageRoute(
@@ -402,7 +518,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: TextButton.styleFrom(padding: EdgeInsets.zero),
                           child: const Text(
                             "Créer un compte",
-                            style: TextStyle(color: Colors.orange, fontSize: 14, fontWeight: FontWeight.bold),
+                            style: TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.bold),
                           ),
                         ),
                       ],
@@ -411,7 +527,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -428,23 +544,35 @@ class _LoginScreenState extends State<LoginScreen> {
     bool isNumericPin = false,
   }) {
     return Container(
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 5))]),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F9FA),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
       child: TextFormField(
         controller: controller,
         obscureText: obscureText,
         keyboardType: keyboardType,
         maxLength: isNumericPin ? 4 : null,
         inputFormatters: isNumericPin ? [FilteringTextInputFormatter.digitsOnly] : null,
+        style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
         decoration: InputDecoration(
           labelText: label,
-          prefixIcon: Icon(icon, color: Colors.orange),
+          labelStyle: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+          prefixIcon: Icon(icon, color: Colors.orange, size: 18),
           counterText: "",
-          suffixIcon: isPassword ? IconButton(icon: Icon(obscureText ? Icons.visibility_off : Icons.visibility), onPressed: onToggleVisibility) : null,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-          filled: true,
-          fillColor: Colors.white,
+          suffixIcon: isPassword
+              ? IconButton(
+            icon: Icon(obscureText ? Icons.visibility_off : Icons.visibility, size: 18, color: Color(0xFF64748B)),
+            onPressed: onToggleVisibility,
+          )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         ),
-        validator: (value) => (value == null || value.isEmpty) ? "Champ requis" : (isNumericPin && value.length != 4 ? "Doit faire 4 chiffres" : null),
+        validator: (value) => (value == null || value.isEmpty)
+            ? "Champ requis"
+            : (isNumericPin && value.length != 4 ? "Doit faire 4 chiffres" : null),
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:fada/screens/home_screen.dart';
 import 'package:fada/services/network_checker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,7 +8,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import '../services/command_service.dart';
-import '../services/database/database_helper.dart'; // Import nécessaire
+import '../services/database/database_helper.dart';
 
 class OrdersScreen extends StatefulWidget {
   const OrdersScreen({super.key});
@@ -17,20 +18,30 @@ class OrdersScreen extends StatefulWidget {
 
 class _OrdersScreenState extends State<OrdersScreen> {
   final CommandService _commandService = CommandService();
-  final DatabaseHelper _dbHelper = DatabaseHelper(); // Instance ajoutée
+  final DatabaseHelper _dbHelper = DatabaseHelper();
   final TextEditingController _searchController = TextEditingController();
 
   List<dynamic> allOrders = [];
   List<dynamic> filteredOrders = [];
   bool isLoading = true;
   String activeFilter = "TOUS";
-  DateTime? selectedDate;
+
+  // Initialisation par défaut à la date du jour (sans l'heure pour comparer proprement les dates)
+  DateTime? selectedDate = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
   @override
   void initState() {
     super.initState();
     _fetchOrders();
     _searchController.addListener(_applyFilters);
+  }
+
+  /// 🔢 Calcul dynamique du nombre de commandes avec le statut PENDING
+  int get _pendingOrdersCount {
+    return allOrders.where((order) {
+      String status = (order['status'] ?? 'PENDING').toString().toUpperCase();
+      return status == 'PENDING';
+    }).length;
   }
 
   Future<void> _fetchOrders() async {
@@ -47,7 +58,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
     if (mounted) {
       setState(() {
         allOrders = localData;
-        _applyFilters(); // Applique le filtre immédiatement
+        _applyFilters(); // Applique les filtres (y compris la date du jour) immédiatement
         isLoading = false;
       });
     }
@@ -186,10 +197,21 @@ class _OrdersScreenState extends State<OrdersScreen> {
         final query = _searchController.text.toLowerCase();
         final name = (order['customerName'] ?? '').toString().toLowerCase();
         bool matchesSearch = name.contains(query);
-        bool matchesDate = selectedDate == null ||
-            (order['orderDate'] != null && DateFormat('yyyy-MM-dd').format(DateTime.parse(order['orderDate'])) == DateFormat('yyyy-MM-dd').format(selectedDate!));
+
+        // Comparaison stricte de la date (ignorant l'heure)
+        bool matchesDate = true;
+        if (selectedDate != null && order['orderDate'] != null) {
+          DateTime orderDateParsed = DateTime.parse(order['orderDate']);
+          matchesDate = orderDateParsed.year == selectedDate!.year &&
+              orderDateParsed.month == selectedDate!.month &&
+              orderDateParsed.day == selectedDate!.day;
+        } else if (selectedDate != null && order['orderDate'] == null) {
+          matchesDate = false;
+        }
+
         String status = (order['status'] ?? 'PENDING').toString().toUpperCase();
         bool matchesStatus = activeFilter == "TOUS" || status == activeFilter;
+
         return matchesSearch && matchesDate && matchesStatus;
       }).toList();
     });
@@ -199,13 +221,59 @@ class _OrdersScreenState extends State<OrdersScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      appBar: AppBar(title: const Text("Mes Commandes", style: TextStyle(color: Colors.black)), backgroundColor: Colors.white, elevation: 0),
+      appBar: AppBar(
+        // 🛠️ Forçage explicite du bouton de retour à gauche pour éviter qu'il ne disparaisse
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          onPressed: () {
+            if (Navigator.canPop(context)) {
+              Navigator.pop(context);
+            } else {
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const HomeScreen()),
+                    (route) => false,
+              );
+            }
+          },
+        ),
+        title: Row(
+          children: [
+            // Icône de facture avec badge indiquant le nombre de commandes en PENDING
+            Badge(
+              isLabelVisible: _pendingOrdersCount > 0,
+              label: Text("$_pendingOrdersCount", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+              backgroundColor: Colors.orange,
+              child: const Icon(Icons.receipt_long_rounded, color: Colors.black, size: 24),
+            ),
+            const SizedBox(width: 12),
+            const Text("Mes Commandes", style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        actions: [
+          // Bouton d'accès direct au HomeScreen
+          IconButton(
+            icon: const Icon(Icons.home_rounded, color: Colors.black54),
+            tooltip: "Accueil",
+            onPressed: () {
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const HomeScreen()),
+                    (route) => false,
+              );
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: Column(
         children: [
           _buildTopBar(),
           Expanded(
             child: isLoading ? const Center(child: CircularProgressIndicator()) :
-            filteredOrders.isEmpty ? const Center(child: Text("Aucune commande trouvée")) :
+            filteredOrders.isEmpty ? const Center(child: Text("Aucune commande trouvée pour cette date")) :
             ListView.separated(
               padding: const EdgeInsets.all(16),
               separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -219,41 +287,138 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 
   Widget _buildTopBar() {
-    return Container(color: Colors.white, padding: const EdgeInsets.all(16), child: Column(children: [
-      Row(children: [
-        Expanded(child: TextField(controller: _searchController, decoration: InputDecoration(hintText: "Rechercher...", prefixIcon: const Icon(Icons.search), border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none), filled: true, fillColor: Colors.grey.shade100))),
-        const SizedBox(width: 8),
-        IconButton.filled(onPressed: () async {
-          DateTime? picked = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2022), lastDate: DateTime(2030));
-          if (picked != null) { setState(() => selectedDate = picked); _applyFilters(); }
-        }, icon: const Icon(Icons.calendar_month), style: IconButton.styleFrom(backgroundColor: Colors.orange))
-      ]),
-      const SizedBox(height: 12),
-      SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: ["TOUS", "COMPLETED", "PENDING", "CANCELLED"].map((f) => GestureDetector(
-        onTap: () { setState(() => activeFilter = f); _applyFilters(); },
-        child: Container(margin: const EdgeInsets.symmetric(horizontal: 4), padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12), decoration: BoxDecoration(color: activeFilter == f ? Colors.orange : Colors.grey.shade200, borderRadius: BorderRadius.circular(8)), child: Text(f, style: TextStyle(color: activeFilter == f ? Colors.white : Colors.grey.shade700, fontWeight: FontWeight.bold))),
-      )).toList()))
-    ]));
+    String dateButtonText = selectedDate == null
+        ? "Toutes les dates"
+        : DateFormat('dd/MM/yyyy').format(selectedDate!);
+
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: "Rechercher...",
+                    prefixIcon: const Icon(Icons.search),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    filled: true,
+                    fillColor: Colors.grey.shade100,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Bouton Calendrier / Filtre de date
+              IconButton.filled(
+                onPressed: () async {
+                  DateTime? picked = await showDatePicker(
+                    context: context,
+                    initialDate: selectedDate ?? DateTime.now(),
+                    firstDate: DateTime(2022),
+                    lastDate: DateTime(2030),
+                  );
+                  if (picked != null) {
+                    setState(() => selectedDate = picked);
+                    _applyFilters();
+                  }
+                },
+                icon: const Icon(Icons.calendar_month),
+                style: IconButton.styleFrom(backgroundColor: Colors.orange),
+              ),
+              // Bouton optionnel pour effacer le filtre de date et voir toutes les dates
+              if (selectedDate != null) ...[
+                const SizedBox(width: 4),
+                IconButton(
+                  onPressed: () {
+                    setState(() => selectedDate = null);
+                    _applyFilters();
+                  },
+                  icon: const Icon(Icons.clear, color: Colors.grey),
+                  tooltip: "Voir toutes les dates",
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Indicateur visuel de la date sélectionnée
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 4.0),
+              child: Text(
+                "Filtré par date : $dateButtonText",
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: ["TOUS", "COMPLETED", "PENDING", "CANCELLED"].map((f) => GestureDetector(
+                onTap: () { setState(() => activeFilter = f); _applyFilters(); },
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 4),
+                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                  decoration: BoxDecoration(color: activeFilter == f ? Colors.orange : Colors.grey.shade200, borderRadius: BorderRadius.circular(8)),
+                  child: Text(f, style: TextStyle(color: activeFilter == f ? Colors.white : Colors.grey.shade700, fontWeight: FontWeight.bold)),
+                ),
+              )).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildOrderTile(dynamic order) {
     String status = (order['status'] ?? 'PENDING').toString().toUpperCase();
-    return Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade100)), child: Column(children: [
-      Row(children: [
-        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.receipt_long, color: Colors.orange)),
-        const SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(order['customerName'] ?? "Inconnu", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          Text(order['orderDate'] != null ? DateFormat('dd MMM yyyy').format(DateTime.parse(order['orderDate'])) : "", style: TextStyle(color: Colors.grey.shade600))
-        ])),
-        Text("${order['totalAmount']} FCFA", style: const TextStyle(fontWeight: FontWeight.w900))
-      ]),
-      const Divider(height: 24),
-      Wrap(alignment: WrapAlignment.end, spacing: 8, runSpacing: 8, children: [
-        OutlinedButton.icon(onPressed: () => _printReceipt(order, (order['totalAmount'] ?? 0).toDouble(), order['paymentMethod'] ?? "Espèces"), icon: const Icon(Icons.print, size: 16), label: const Text("Imp")),
-        if (status == 'PENDING') FilledButton.icon(onPressed: () => _showSettleDialog(order), style: FilledButton.styleFrom(backgroundColor: Colors.blue), icon: const Icon(Icons.attach_money, size: 16), label: const Text("Régler")),
-        if (status != 'CANCELLED') FilledButton(onPressed: () => _cancelOrder(order), style: FilledButton.styleFrom(backgroundColor: Colors.red), child: const Text("Annuler")),
-      ])
-    ]));
+
+    // Correction de l'affichage du montant
+    final rawAmount = order['totalCredit'] ?? order['totalAmount'] ?? 0;
+    final double displayAmount = (rawAmount is num) ? rawAmount.toDouble() : double.tryParse(rawAmount.toString()) ?? 0.0;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade100)),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.receipt_long, color: Colors.orange)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(order['customerName'] ?? "Inconnu", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    Text(order['orderDate'] != null ? DateFormat('dd MMM yyyy HH:mm').format(DateTime.parse(order['orderDate'])) : "", style: TextStyle(color: Colors.grey.shade600))
+                  ],
+                ),
+              ),
+              Text("${displayAmount.toStringAsFixed(0)} FCFA", style: const TextStyle(fontWeight: FontWeight.w900))
+            ],
+          ),
+          const Divider(height: 24),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(onPressed: () => _printReceipt(order, displayAmount, order['paymentMethod'] ?? "Espèces"), icon: const Icon(Icons.print, size: 16), label: const Text("Imp")),
+              if (status == 'PENDING') FilledButton.icon(onPressed: () => _showSettleDialog(order), style: FilledButton.styleFrom(backgroundColor: Colors.blue), icon: const Icon(Icons.attach_money, size: 16), label: const Text("Régler")),
+              if (status != 'CANCELLED') FilledButton(onPressed: () => _cancelOrdersHandler(order), style: FilledButton.styleFrom(backgroundColor: Colors.red), child: const Text("Annuler")),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _cancelOrdersHandler(dynamic order) async {
+    await _cancelOrder(order);
   }
 }

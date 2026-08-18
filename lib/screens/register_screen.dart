@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/user_service.dart';
-import '../services/network_checker.dart'; // ✅ Import de ton outil de vérification réseau intelligent
+import '../services/network_checker.dart';
 
 class RegisterScreen extends StatefulWidget {
   final bool isFromLogin;
@@ -50,7 +50,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _isCheckingConnectivity = true;
     });
 
-    // ✅ Utilisation directe de ta méthode de Ping (Actuator)
     final bool backendAccessible = await NetworkChecker.isBackendAccessible();
 
     setState(() {
@@ -68,7 +67,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   /// 📝 Envoi du Code PIN d'accès (WhatsApp ou SMS) pour les collaborateurs de l'application PB-M
   Future<void> _sendAccessCode(String method, String phone, String userName, String pin) async {
     final cleanPhone = phone.replaceAll(' ', '');
-    final message = "Bonjour $userName, voici vos accès à l'application PB-M.\n\n"
+    final message = "Bonjour $userName, voici vos accès à l'application POKIBOO.\n\n"
         "Profil : $userProfile\n"
         "Identifiant (Email) : ${emailController.text.trim()}\n"
         "Votre Code PIN secret : *$pin*\n\n"
@@ -119,31 +118,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
             children: [
               const Text(
                 "Envoyer les accès au collaborateur",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
               ),
               const SizedBox(height: 5),
               Text(
                 "Le code PIN généré est le $pin. Choisissez un canal d'envoi :",
-                style: const TextStyle(color: Colors.grey, fontSize: 14),
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
               ),
               const SizedBox(height: 20),
               ListTile(
-                leading: const Icon(Icons.message, color: Colors.blue, size: 30),
-                title: const Text("Envoyer par SMS", style: TextStyle(fontWeight: FontWeight.bold)),
+                leading: const Icon(Icons.message, color: Colors.blue, size: 24),
+                title: const Text("Envoyer par SMS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                 onTap: () async {
-                  Navigator.pop(bottomSheetContext); // Ferme la modale proprement
+                  Navigator.pop(bottomSheetContext);
                   await _sendAccessCode('sms', phone, userName, pin);
-                  if (mounted) Navigator.pop(context); // Quitte l'écran de création
+                  if (mounted) Navigator.pop(context);
                 },
               ),
               const Divider(),
               ListTile(
-                leading: const Icon(Icons.phone_android, color: Colors.green, size: 30),
-                title: const Text("Envoyer par WhatsApp", style: TextStyle(fontWeight: FontWeight.bold)),
+                leading: const Icon(Icons.phone_android, color: Colors.green, size: 24),
+                title: const Text("Envoyer par WhatsApp", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                 onTap: () async {
-                  Navigator.pop(bottomSheetContext); // Ferme la modale proprement
+                  Navigator.pop(bottomSheetContext);
                   await _sendAccessCode('whatsapp', phone, userName, pin);
-                  if (mounted) Navigator.pop(context); // Quitte l'écran de création
+                  if (mounted) Navigator.pop(context);
                 },
               ),
               const SizedBox(height: 10),
@@ -158,7 +157,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> handleRegister() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // ✅ Double check réseau avec ton service juste avant de faire l'envoi
     if (!await NetworkChecker.isBackendAccessible()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -225,7 +223,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         finalPassword = _generateRandomPin();
       }
 
-      // 🔍 LOG DU MOT DE PASSE POUR LES TESTS
       debugPrint("🔑 [TEST LOG] Mot de passe / PIN généré pour $targetName : '$finalPassword'");
 
       final success = await userService.registerUser(
@@ -272,214 +269,353 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ⏳ 1. Écran de chargement pendant l'analyse de l'API (Actuator health)
     if (_isCheckingConnectivity) {
       return const Scaffold(
+        backgroundColor: Color(0xFFF8F9FA),
         body: Center(
           child: CircularProgressIndicator(color: Colors.orange),
         ),
       );
     }
 
-    // 🛑 2. Écran d'erreur bloquant si l'instance Spring Boot est injoignable
     if (!_isOnline) {
       return Scaffold(
-        backgroundColor: const Color(0xFFF9F7F2),
+        backgroundColor: const Color(0xFFF8F9FA),
         appBar: AppBar(
           backgroundColor: Colors.white,
           elevation: 0,
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.black),
+            icon: const Icon(Icons.arrow_back, color: Color(0xFF1E293B)),
             onPressed: () => Navigator.pop(context),
           ),
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(32.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(Icons.cloud_off_rounded, size: 80, color: Colors.orange),
-              const SizedBox(height: 24),
-              const Text(
-                "Serveur Central Injoignable",
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF2D3142)),
+        body: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20.0),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 440),
+              padding: const EdgeInsets.all(24.0),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(color: Colors.grey.shade200, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              const Text(
-                "L'application n'arrive pas à joindre les services de synchronisation réseau. L'enregistrement de nouveaux comptes est désactivé en mode hors-ligne pour préserver la cohérence des structures.",
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 15, color: Colors.black54, height: 1.5),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Icon(Icons.cloud_off_rounded, size: 64, color: Colors.orange),
+                  const SizedBox(height: 20),
+                  const Text(
+                    "Serveur Central Injoignable",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    "L'application n'arrive pas à joindre les services de synchronisation réseau. L'enregistrement de nouveaux comptes est désactivé en mode hors-ligne pour préserver la cohérence des structures.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 13, color: Color(0xFF64748B), height: 1.5),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    height: 46,
+                    child: ElevatedButton.icon(
+                      onPressed: _checkInitialConnectivity,
+                      icon: const Icon(Icons.sync_rounded, color: Colors.white, size: 16),
+                      label: const Text("TENTER UNE RECONNEXION", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 32),
-              ElevatedButton.icon(
-                onPressed: _checkInitialConnectivity,
-                icon: const Icon(Icons.sync_rounded, color: Colors.white),
-                label: const Text("TENTER UNE RECONNEXION", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orange,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                  elevation: 0,
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       );
     }
 
-    // ✨ 3. Affichage du formulaire classique si le backend est accessible
     return Scaffold(
-      backgroundColor: const Color(0xFFF9F7F2),
+      backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
         title: Text(
-            widget.isFromLogin ? "Initialisation Super admin" : "Nouvel Utilisateur",
-            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)
+          widget.isFromLogin ? "Initialisation Super admin" : "Nouvel Utilisateur",
+          style: const TextStyle(color: Color(0xFF1E293B), fontWeight: FontWeight.bold, fontSize: 16),
         ),
         backgroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
-        iconTheme: const IconThemeData(color: Colors.black),
+        iconTheme: const IconThemeData(color: Color(0xFF1E293B)),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildTextField(nameController, 'Nom complet', Icons.person, TextInputType.name),
-              _buildTextField(phoneController, 'Téléphone', Icons.phone, TextInputType.phone),
-              _buildTextField(emailController, 'Adresse Email (Optionnel)', Icons.email, TextInputType.emailAddress),
-
-              if (widget.isFromLogin) ...[
-                _buildPasswordField(passwordController, 'Code PIN (4 chiffres)', obscurePassword, () => setState(() => obscurePassword = !obscurePassword)),
-                _buildPasswordField(confirmPasswordController, 'Confirmer le Code PIN', obscureConfirm, () => setState(() => obscureConfirm = !obscureConfirm), isConfirm: true),
-              ] else ...[
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 15, left: 5, right: 5),
-                  child: Container(
-                    decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.orange.withOpacity(0.3))
-                    ),
-                    child: const ListTile(
-                      leading: Icon(Icons.info_outline, color: Colors.orange),
-                      title: Text(
-                        "Le mot de passe d'accès sera un code PIN à 4 chiffres généré automatiquement. Vous pourrez l'envoyer par WhatsApp ou SMS à la fin.",
-                        style: TextStyle(color: Colors.black87, fontSize: 13, fontWeight: FontWeight.w500),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 440),
+              padding: const EdgeInsets.all(24.0),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24.0),
+                border: Border.all(color: Colors.grey.shade200, width: 1),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // 🏢 Badge SaaS Header
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(
+                                color: Colors.orange,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              widget.isFromLogin ? "CONFIGURATION ADMIN" : "CRÉATION DE COMPTE",
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.orange,
+                                letterSpacing: 1.0,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              ],
 
-              const SizedBox(height: 10),
-              if (!widget.isFromLogin) ...[
-                const Text("  Type de profil d'accès :", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
-                const SizedBox(height: 10),
-                Container(
-                  decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))]
-                  ),
-                  child: Column(children: [
-                    _buildRadio("Administrateur"),
-                    _buildRadio("Vente"),
-                    _buildRadio("Gestionnaire de stock")
-                  ]),
-                ),
-              ] else ...[
-                const ListTile(
-                    leading: Icon(Icons.admin_panel_settings, color: Colors.orange),
-                    title: Text("Profil assigné : Super admin"),
-                    subtitle: Text("Gestionnaire suprême de la plateforme.")
-                ),
-              ],
+                    const SizedBox(height: 18),
+                    const Divider(color: Color(0xFFF1F5F9), thickness: 1),
+                    const SizedBox(height: 16),
 
-              const SizedBox(height: 30),
-              SizedBox(
-                width: double.infinity, height: 55,
-                child: ElevatedButton(
-                  onPressed: isLoading ? null : handleRegister,
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                      elevation: 0
-                  ),
-                  child: isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : Text(
-                      widget.isFromLogin ? 'INITIALISER MON COMPTE' : 'GÉNÉRER LES ACCÈS & ENVOYER',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)
-                  ),
+                    // 📝 Champs du Formulaire
+                    _buildTextField(nameController, 'Nom complet', Icons.person_outline_rounded, TextInputType.name),
+                    const SizedBox(height: 12),
+                    _buildTextField(phoneController, 'Téléphone', Icons.phone_outlined, TextInputType.phone),
+                    const SizedBox(height: 12),
+                    _buildTextField(emailController, 'Adresse Email (Optionnel)', Icons.email_outlined, TextInputType.emailAddress),
+
+                    if (widget.isFromLogin) ...[
+                      const SizedBox(height: 12),
+                      _buildPasswordField(passwordController, 'Code PIN (4 chiffres)', obscurePassword, () => setState(() => obscurePassword = !obscurePassword)),
+                      const SizedBox(height: 12),
+                      _buildPasswordField(confirmPasswordController, 'Confirmer le Code PIN', obscureConfirm, () => setState(() => obscureConfirm = !obscureConfirm), isConfirm: true),
+                    ] else ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info_outline_rounded, color: Colors.orange, size: 18),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: const Text(
+                                "Le code PIN sera généré automatiquement et pourra être envoyé par WhatsApp ou SMS.",
+                                style: TextStyle(color: Color(0xFF475569), fontSize: 11, fontWeight: FontWeight.w500, height: 1.3),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 16),
+
+                    if (!widget.isFromLogin) ...[
+                      const Text("Type de profil d'accès :", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1E293B))),
+                      const SizedBox(height: 8),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8F9FA),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Column(
+                          children: [
+                            _buildRadio("Administrateur"),
+                            _buildRadio("Vente"),
+                            _buildRadio("Gestionnaire de stock"),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8F9FA),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.admin_panel_settings_rounded, color: Colors.orange, size: 18),
+                            SizedBox(width: 10),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text("Profil assigné : Super admin", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1E293B))),
+                                Text("Gestionnaire suprême de la plateforme.", style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 24),
+
+                    // 🔘 Bouton Soumission (Hauteur 46)
+                    SizedBox(
+                      width: double.infinity,
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: isLoading ? null : handleRegister,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        child: isLoading
+                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                            : Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(widget.isFromLogin ? Icons.check_circle_outline_rounded : Icons.send_rounded, color: Colors.white, size: 16),
+                            const SizedBox(width: 8),
+                            Text(
+                              widget.isFromLogin ? 'INITIALISER MON COMPTE' : 'GÉNÉRER & ENVOYER',
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildTextField(TextEditingController controller, String label, IconData icon, TextInputType type) => Padding(
-    padding: const EdgeInsets.only(bottom: 15),
-    child: TextFormField(
-      controller: controller,
-      keyboardType: type,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon, color: Colors.orange),
-        filled: true, fillColor: Colors.white,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-        contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 15),
+  Widget _buildTextField(TextEditingController controller, String label, IconData icon, TextInputType type) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F9FA),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
       ),
-      validator: (val) {
-        if (val == null || val.trim().isEmpty) {
-          if (label.contains('Optionnel')) return null;
-          return 'Requis';
-        }
-        if (label.contains('Email') && !val.contains('@')) return 'Email invalide';
-        return null;
-      },
-    ),
-  );
-
-  Widget _buildPasswordField(TextEditingController controller, String label, bool obscure, VoidCallback toggle, {bool isConfirm = false}) => Padding(
-    padding: const EdgeInsets.only(bottom: 15),
-    child: TextFormField(
-      controller: controller,
-      obscureText: obscure,
-      keyboardType: TextInputType.number,
-      maxLength: 4,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(isConfirm ? Icons.lock_outline : Icons.lock, color: Colors.orange),
-        suffixIcon: IconButton(icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: Colors.orange), onPressed: toggle),
-        filled: true, fillColor: Colors.white,
-        counterText: "",
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
-        contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 15),
+      child: TextFormField(
+        controller: controller,
+        keyboardType: type,
+        style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+          prefixIcon: Icon(icon, color: Colors.orange, size: 18),
+          filled: true,
+          fillColor: Colors.transparent,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        ),
+        validator: (val) {
+          if (val == null || val.trim().isEmpty) {
+            if (label.contains('Optionnel')) return null;
+            return 'Champ requis';
+          }
+          if (label.contains('Email') && !val.contains('@')) return 'Email invalide';
+          return null;
+        },
       ),
-      validator: (val) {
-        if (val == null || val.isEmpty) return 'Requis';
-        if (val.length != 4) return 'Le code PIN doit contenir exactement 4 chiffres';
-        if (isConfirm && val != passwordController.text) return 'Mots de passe différents';
-        return null;
-      },
-    ),
-  );
+    );
+  }
 
-  Widget _buildRadio(String value) => RadioListTile<String>(
-      title: Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
+  Widget _buildPasswordField(TextEditingController controller, String label, bool obscure, VoidCallback toggle, {bool isConfirm = false}) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F9FA),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: TextFormField(
+        controller: controller,
+        obscureText: obscure,
+        keyboardType: TextInputType.number,
+        maxLength: 4,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        style: const TextStyle(fontSize: 13, color: Color(0xFF1E293B)),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+          prefixIcon: Icon(isConfirm ? Icons.lock_outline_rounded : Icons.lock_rounded, color: Colors.orange, size: 18),
+          suffixIcon: IconButton(
+            icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: const Color(0xFF64748B), size: 18),
+            onPressed: toggle,
+          ),
+          filled: true,
+          fillColor: Colors.transparent,
+          counterText: "",
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        ),
+        validator: (val) {
+          if (val == null || val.isEmpty) return 'Champ requis';
+          if (val.length != 4) return 'Doit faire 4 chiffres';
+          if (isConfirm && val != passwordController.text) return 'Les codes diffèrent';
+          return null;
+        },
+      ),
+    );
+  }
+
+  Widget _buildRadio(String value) {
+    return RadioListTile<String>(
+      title: Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF1E293B))),
       value: value,
       groupValue: userProfile,
       activeColor: Colors.orange,
-      onChanged: (val) => setState(() => userProfile = val!)
-  );
+      dense: true,
+      onChanged: (val) => setState(() => userProfile = val!),
+    );
+  }
 }

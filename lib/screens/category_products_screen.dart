@@ -1,8 +1,9 @@
 import 'dart:io';
+import 'package:fada/screens/scanner_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/product_service.dart';
-import '../services/network_checker.dart'; // ✅ Intégration de ton service réseau
+import '../services/network_checker.dart';
 import 'add_product_screen.dart';
 
 class CategoryProductsScreen extends StatefulWidget {
@@ -108,7 +109,9 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
       _checkNetworkAndLoad();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erreur mise à jour"), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Erreur mise à jour"), backgroundColor: Colors.red),
+        );
       }
     }
   }
@@ -121,21 +124,31 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
     final TextEditingController stockController = TextEditingController(text: product['productQte']?.toString() ?? '0');
     final TextEditingController alertStockController = TextEditingController(text: product['stockAlert']?.toString() ?? '0');
 
+    // 🔹 Récupération alignée sur la propriété JSON de Spring Boot (productQrCode)
+    final String initialQrCode = product['productQrCode']?.toString() ??
+        product['qrCode']?.toString() ??
+        product['barCode']?.toString() ??
+        product['codeBarre']?.toString() ??
+        '';
+
+    final TextEditingController qrCodeController = TextEditingController(text: initialQrCode);
+
     File? selectedImage;
     final ImagePicker picker = ImagePicker();
+    bool isCheckingBarcode = false;
+    String? barcodeError;
 
-    // 🌟 Décoration aérée et optimisée
-    InputDecoration _inputStyle(String label, IconData icon, {String? suffix}) {
+    InputDecoration inputStyle(String label, IconData icon, {String? suffix, Widget? suffixIcon}) {
       return InputDecoration(
         labelText: label,
         labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
         prefixIcon: Icon(icon, color: const Color(0xFFFF9800), size: 18),
         suffixText: suffix,
+        suffixIcon: suffixIcon,
         suffixStyle: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey, fontSize: 13),
         floatingLabelStyle: const TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.bold),
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
-        // ✅ Moins haut à l'intérieur pour un rendu plus compact et élégant
         contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
         enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: Colors.grey.shade200, width: 1)),
@@ -147,153 +160,280 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-          titlePadding: const EdgeInsets.only(top: 24, left: 24, right: 24, bottom: 4),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          actionsPadding: const EdgeInsets.only(bottom: 16, right: 16, left: 16, top: 8),
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(color: const Color(0xFFFF9800).withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.edit_note_rounded, color: Color(0xFFFF9800)),
+        builder: (context, setDialogState) {
+          // 📷 Scan du QR code avec alerte pop-up et retour visuel sous le champ
+          Future<void> scanQRCode() async {
+            final String? scannedCode = await Navigator.push<String>(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const ScannerScreen(isForRegistration: true),
               ),
-              const SizedBox(width: 12),
-              const Text("Modifier le produit", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF1E293B))),
-            ],
-          ),
-          content: SizedBox(
-            width: MediaQuery.of(context).size.width * 0.95,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 📸 Zone Image
-                  Center(
-                    child: GestureDetector(
-                      onTap: () async {
-                        final XFile? pickedFile = await picker.pickImage(source: ImageSource.gallery);
-                        if (pickedFile != null) {
-                          setDialogState(() => selectedImage = File(pickedFile.path));
-                        }
-                      },
-                      child: Stack(
-                        alignment: Alignment.bottomRight,
+            );
+
+            if (scannedCode != null && scannedCode.isNotEmpty) {
+              // Si l'utilisateur a scanné exactement le même code initial du produit
+              if (scannedCode == initialQrCode) {
+                setDialogState(() {
+                  qrCodeController.text = scannedCode;
+                  barcodeError = null;
+                });
+                return;
+              }
+
+              // Indiquer qu'on vérifie l'existence du code
+              setDialogState(() {
+                isCheckingBarcode = true;
+                barcodeError = null;
+              });
+
+              bool exists = await _productService.checkBarcodeExists(
+                scannedCode,
+                excludeProductId: product['id'].toString(),
+              );
+
+              setDialogState(() {
+                isCheckingBarcode = false;
+              });
+
+              if (exists) {
+                // ❌ Le code existe déjà chez un autre produit
+                setDialogState(() {
+                  barcodeError = "Le code \"$scannedCode\" est déjà attribué à un autre produit.";
+                });
+
+                if (context.mounted) {
+                  showDialog(
+                    context: context,
+                    builder: (dialogCtx) => AlertDialog(
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      title: const Row(
                         children: [
-                          Container(
-                            height: 100,
-                            width: 100,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF1F5F9),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 4))],
-                              border: Border.all(color: Colors.white, width: 3),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(17),
-                              child: selectedImage != null
-                                  ? Image.file(selectedImage!, fit: BoxFit.cover)
-                                  : (product['productPhotoUrl'] != null && product['productPhotoUrl'].toString().startsWith('http')
-                                  ? Image.network(product['productPhotoUrl'], fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.camera_alt_rounded, size: 32, color: Colors.grey))
-                                  : const Icon(Icons.camera_alt_rounded, size: 32, color: Color(0xFF94A3B8))),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: const BoxDecoration(color: Color(0xFFFF9800), shape: BoxShape.circle),
-                            child: const Icon(Icons.add_a_photo_rounded, size: 12, color: Colors.white),
-                          )
+                          Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+                          SizedBox(width: 8),
+                          Text("Code déjà existant", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                         ],
                       ),
+                      content: Text(
+                        "Le code QR / Code-barres \"$scannedCode\" est déjà attribué à un autre produit.",
+                        style: const TextStyle(fontSize: 14, color: Color(0xFF64748B)),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogCtx),
+                          child: const Text("OK", style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.bold)),
+                        ),
+                      ],
                     ),
-                  ),
-
-                  // ✅ Marges verticales accentuées entre chaque bloc
-                  const SizedBox(height: 24),
-
-                  // 📝 Champ : Nom
-                  TextField(controller: nameController, decoration: _inputStyle("Nom du produit", Icons.shopping_bag_rounded)),
-                  const SizedBox(height: 16), // Espacement net
-
-                  // 📝 Champ : Description
-                  TextField(controller: descController, decoration: _inputStyle("Description", Icons.description_rounded)),
-                  const SizedBox(height: 16), // Espacement net
-
-                  // 💰 Section Prix (Grille espacée)
-                  Row(
-                    children: [
-                      Expanded(child: TextField(controller: buyPriceController, decoration: _inputStyle("Prix Achat", Icons.arrow_downward_rounded, suffix: "F"), keyboardType: TextInputType.number)),
-                      const SizedBox(width: 16), // Plus d'espace entre les colonnes
-                      Expanded(child: TextField(controller: sellPriceController, decoration: _inputStyle("Prix Vente", Icons.arrow_upward_rounded, suffix: "F"), keyboardType: TextInputType.number)),
-                    ],
-                  ),
-                  const SizedBox(height: 16), // Espacement net
-
-                  // 📦 Section Stock (Grille espacée)
-                  Row(
-                    children: [
-                      Expanded(child: TextField(controller: stockController, decoration: _inputStyle("Stock Actuel", Icons.inventory_rounded), keyboardType: TextInputType.number)),
-                      const SizedBox(width: 16), // Plus d'espace entre les colonnes
-                      Expanded(child: TextField(controller: alertStockController, decoration: _inputStyle("Stock Alerte", Icons.warning_amber_rounded), keyboardType: TextInputType.number)),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
-              child: const Text("Annuler", style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold, fontSize: 14)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF9800),
-                elevation: 0,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              onPressed: () async {
-                try {
-                  final Map<String, dynamic> updateData = {
-                    "productName": nameController.text,
-                    "productDescription": descController.text,
-                    "prixAchat": double.tryParse(buyPriceController.text) ?? 0,
-                    "productPrice": double.tryParse(sellPriceController.text) ?? 0,
-                    "productQte": double.tryParse(stockController.text) ?? 0,
-                    "stockAlert": double.tryParse(alertStockController.text) ?? 0,
-                    "codeStructure": product['codeStructure'],
-                    "categoryId": product['categoryId'],
-                  };
-
-                  await _productService.updateProduct(product['id'].toString(), updateData);
-
-                  if (selectedImage != null) {
-                    await _productService.uploadPhoto(product['id'].toString(), selectedImage!);
-                  }
-
-                  if (context.mounted) Navigator.pop(context);
-                  _checkNetworkAndLoad();
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Produit mis à jour !"), backgroundColor: Colors.green));
-                  }
-                } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Erreur : $e"), backgroundColor: Colors.red));
-                  }
+                  );
                 }
-              },
-              child: const Text("Enregistrer", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              } else {
+                // ✅ Le code est disponible
+                setDialogState(() {
+                  qrCodeController.text = scannedCode;
+                  barcodeError = null;
+                });
+              }
+            }
+          }
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            titlePadding: const EdgeInsets.only(top: 24, left: 24, right: 24, bottom: 4),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            actionsPadding: const EdgeInsets.only(bottom: 16, right: 16, left: 16, top: 8),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: const Color(0xFFFF9800).withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.edit_note_rounded, color: Color(0xFFFF9800)),
+                ),
+                const SizedBox(width: 12),
+                const Text("Modifier le produit", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Color(0xFF1E293B))),
+              ],
             ),
-          ],
-        ),
+            content: SizedBox(
+              width: MediaQuery.of(context).size.width * 0.95,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 📸 Zone Image
+                    Center(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final XFile? pickedFile = await picker.pickImage(source: ImageSource.gallery);
+                          if (pickedFile != null) {
+                            setDialogState(() => selectedImage = File(pickedFile.path));
+                          }
+                        },
+                        child: Stack(
+                          alignment: Alignment.bottomRight,
+                          children: [
+                            Container(
+                              height: 100,
+                              width: 100,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF1F5F9),
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 4))],
+                                border: Border.all(color: Colors.white, width: 3),
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(17),
+                                child: selectedImage != null
+                                    ? Image.file(selectedImage!, fit: BoxFit.cover)
+                                    : (product['productPhotoUrl'] != null && product['productPhotoUrl'].toString().startsWith('http')
+                                    ? Image.network(product['productPhotoUrl'], fit: BoxFit.cover, errorBuilder: (_, __, ___) => const Icon(Icons.camera_alt_rounded, size: 32, color: Colors.grey))
+                                    : const Icon(Icons.camera_alt_rounded, size: 32, color: Color(0xFF94A3B8))),
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: const BoxDecoration(color: Color(0xFFFF9800), shape: BoxShape.circle),
+                              child: const Icon(Icons.add_a_photo_rounded, size: 12, color: Colors.white),
+                            )
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // 📷 Zone Code QR / Barcode
+                    TextField(
+                      controller: qrCodeController,
+                      readOnly: true,
+                      decoration: inputStyle(
+                        "Code QR / Code-barres",
+                        Icons.qr_code_scanner_rounded,
+                        suffixIcon: isCheckingBarcode
+                            ? const Padding(
+                          padding: EdgeInsets.all(12.0),
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF9800)),
+                        )
+                            : IconButton(
+                          icon: const Icon(Icons.qr_code_scanner_rounded, color: Color(0xFFFF9800)),
+                          onPressed: scanQRCode,
+                        ),
+                      ),
+                    ),
+                    if (barcodeError != null) ...[
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          barcodeError!,
+                          style: const TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 16),
+
+                    // 📝 Champ : Nom
+                    TextField(controller: nameController, decoration: inputStyle("Nom du produit", Icons.shopping_bag_rounded)),
+                    const SizedBox(height: 16),
+
+                    // 📝 Champ : Description
+                    TextField(controller: descController, decoration: inputStyle("Description", Icons.description_rounded)),
+                    const SizedBox(height: 16),
+
+                    // 💰 Section Prix
+                    Row(
+                      children: [
+                        Expanded(child: TextField(controller: buyPriceController, decoration: inputStyle("Prix Achat", Icons.arrow_downward_rounded, suffix: "F"), keyboardType: TextInputType.number)),
+                        const SizedBox(width: 16),
+                        Expanded(child: TextField(controller: sellPriceController, decoration: inputStyle("Prix Vente", Icons.arrow_upward_rounded, suffix: "F"), keyboardType: TextInputType.number)),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    // 📦 Section Stock
+                    Row(
+                      children: [
+                        Expanded(child: TextField(controller: stockController, decoration: inputStyle("Stock Actuel", Icons.inventory_rounded), keyboardType: TextInputType.number)),
+                        const SizedBox(width: 16),
+                        Expanded(child: TextField(controller: alertStockController, decoration: inputStyle("Stock Alerte", Icons.warning_amber_rounded), keyboardType: TextInputType.number)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12)),
+                child: const Text("Annuler", style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold, fontSize: 14)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFF9800),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: barcodeError != null
+                    ? null
+                    : () async {
+                  try {
+                    final String finalQrCode = qrCodeController.text.trim();
+
+                    // Validation finale du QR avant enregistrement
+                    if (finalQrCode.isNotEmpty && finalQrCode != initialQrCode) {
+                      bool exists = await _productService.checkBarcodeExists(
+                        finalQrCode,
+                        excludeProductId: product['id'].toString(),
+                      );
+                      if (exists) {
+                        setDialogState(() {
+                          barcodeError = "Ce code QR est déjà attribué à un autre produit.";
+                        });
+                        return;
+                      }
+                    }
+
+                    // 🔹 Payload ajusté pour utiliser productQrCode (clé exacte Jackson de l'entité Java)
+                    final Map<String, dynamic> updateData = {
+                      "id": product['id'],
+                      "productName": nameController.text,
+                      "productDescription": descController.text,
+                      "prixAchat": double.tryParse(buyPriceController.text) ?? 0,
+                      "productPrice": double.tryParse(sellPriceController.text) ?? 0,
+                      "productQte": double.tryParse(stockController.text) ?? 0,
+                      "stockAlert": double.tryParse(alertStockController.text) ?? 0,
+                      "productQrCode": finalQrCode, // Clé exacte reconnue par @JsonProperty("productQrCode")
+                      "codeStructure": product['codeStructure'],
+                      "categoryId": product['categoryId'],
+                    };
+
+                    await _productService.updateProduct(product['id'].toString(), updateData);
+
+                    if (selectedImage != null) {
+                      await _productService.uploadPhoto(product['id'].toString(), selectedImage!);
+                    }
+
+                    if (context.mounted) Navigator.pop(context);
+                    _checkNetworkAndLoad();
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Produit mis à jour !"), backgroundColor: Colors.green));
+                    }
+                  } catch (e) {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Erreur : $e"), backgroundColor: Colors.red));
+                    }
+                  }
+                },
+                child: const Text("Enregistrer", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -448,8 +588,8 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
             contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             leading: _productImage(p),
             title: Text(
-                p['productName'] ?? 'Sans nom',
-                style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B), fontSize: 15)
+              p['productName'] ?? 'Sans nom',
+              style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E293B), fontSize: 15),
             ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

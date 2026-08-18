@@ -49,6 +49,7 @@ class CatService {
   }
 
   // 🔹 3. Créer une catégorie
+
   Future<Map<String, dynamic>> createCategory({
     required String name,
     required String description,
@@ -59,6 +60,8 @@ class CatService {
       "nameCat": name,
       "description": description,
       "codeStructure": structureId,
+      "isActive": true,
+      "deleted": false,
     });
 
     final response = await http.post(
@@ -70,7 +73,9 @@ class CatService {
     if (response.statusCode == 201 || response.statusCode == 200) {
       return jsonDecode(response.body);
     } else {
-      throw Exception('Erreur création catégorie: ${response.statusCode}');
+      // Renvoie le message d'erreur textuel renvoyé par le backend
+      final errorMsg = response.body.isNotEmpty ? response.body : 'Erreur ${response.statusCode}';
+      throw Exception(errorMsg);
     }
   }
 

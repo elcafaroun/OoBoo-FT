@@ -55,4 +55,32 @@ class CategoryService {
       return []; // Renvoie une liste vide plutôt que de faire crasher l'UI
     }
   }
+
+  Future<int> countCategoriesByStructure(String structureId) async {
+    if (await NetworkChecker.isBackendAccessible()) {
+      try {
+        final url = Uri.parse('$baseUrl/category/count/structure/$structureId');
+        final response = await http.get(url).timeout(const Duration(seconds: 5));
+
+        if (response.statusCode == 200) {
+          final count = jsonDecode(response.body);
+          if (count is int) return count;
+          if (count is num) return count.toInt();
+        }
+      } catch (e) {
+        print("⚠️ Erreur réseau comptage catégories : $e");
+      }
+    }
+
+    // Fallback SQLite local
+    try {
+      final localCategories = await _dbHelper.getLocalEntities('categories', structureId);
+      return localCategories.length;
+    } catch (e) {
+      print("❌ Erreur comptage catégories SQLite local : $e");
+      return 0;
+    }
+  }
+
+
 }

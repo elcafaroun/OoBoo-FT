@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,8 +10,6 @@ import '../services/network_checker.dart';
 import '../models/subscription_plan.dart';
 import 'structure_categories_screen.dart';
 import 'subscription_screen.dart';
-// Importez votre écran d'accueil si nécessaire :
-// import 'home_screen.dart';
 
 class MonEspaceScreen extends StatefulWidget {
   const MonEspaceScreen({super.key});
@@ -48,7 +47,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       }
       await _loadStructures();
     } catch (e) {
-      debugPrint(" Erreur lors de la vérification réseau : $e");
+      debugPrint("⚠️ Erreur lors de la vérification réseau : $e");
       if (mounted) {
         setState(() => isBackendAccessible = false);
       }
@@ -70,7 +69,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       if (userId != null) {
         List<dynamic> result =
         await _structureService.getStructuresByUser(userId);
-        debugPrint(" Structures récupérées : $result");
+        debugPrint("📋 Structures récupérées : $result");
         if (mounted) {
           setState(() {
             userStructures = result;
@@ -78,7 +77,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
         }
       }
     } catch (e) {
-      debugPrint(" Erreur de chargement des structures : $e");
+      debugPrint("⚠️ Erreur de chargement des structures : $e");
     }
   }
 
@@ -88,7 +87,6 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
     (s['idStructure'] ?? s['id'] ?? s['structureId'] ?? '').toString();
     final String nom = s['nomStructure'] ?? s['nom'] ?? 'Structure';
 
-    // 🔍 Log pour vérifier l'ID et le nom envoyés
     debugPrint("🚀 Navigation vers l'admin - ID envoyé : $id | Nom : $nom");
 
     await prefs.setString('selected_structure_id', id);
@@ -99,11 +97,14 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
 
     if (!mounted) return;
     Navigator.push(
-        context,
-        MaterialPageRoute(
-            builder: (_) => StructureCategoriesScreen(
-                structureId: id,
-                structureName: nom)));
+      context,
+      MaterialPageRoute(
+        builder: (_) => StructureCategoriesScreen(
+          structureId: id,
+          structureName: nom,
+        ),
+      ),
+    );
   }
 
   bool _isExpired(dynamic s) {
@@ -116,7 +117,6 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
     }
   }
 
-  /// Helper pour extraire le texte/libellé d'une valeur (Map, String ou Object)
   String _parseLabel(dynamic item) {
     if (item == null) return '';
     if (item is Map) {
@@ -136,7 +136,6 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
     return item.toString().trim();
   }
 
-  ///  Soumission de la mise à jour avec gestion sécurisée de l'image et du Timeout
   Future<bool> _submitStructureUpdate({
     required String id,
     required Map<String, dynamic> updatedStructure,
@@ -154,7 +153,6 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
     }
   }
 
-  /// Pop-up de modification dynamique
   Future<void> _showEditDialog(dynamic s) async {
     final String id =
     (s['idStructure'] ?? s['id'] ?? s['structureId'] ?? '').toString();
@@ -178,7 +176,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       rawTypes = results[0] ?? [];
       rawVilles = results[1] ?? [];
     } catch (e) {
-      debugPrint(" Erreur chargement listes types/villes : $e");
+      debugPrint("⚠️ Erreur chargement listes types/villes : $e");
     } finally {
       if (mounted) Navigator.pop(context);
     }
@@ -337,8 +335,10 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                               Icons.image_not_supported,
                               color: Colors.grey),
                         )
-                            : const Icon(Icons.image_not_supported,
-                            size: 40, color: Colors.grey)))
+                            : const Icon(
+                            Icons.image_not_supported,
+                            size: 40,
+                            color: Colors.grey)))
                             : Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: const [
@@ -723,78 +723,65 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                               elevation: 0,
                             ),
                             onPressed: () async {
-                              if (formKey.currentState!.validate()) {
-                                Navigator.pop(ctx);
-                                setState(() => isLoading = true);
+                              if (!formKey.currentState!.validate()) return;
 
-                                try {
-                                  Map<String, dynamic> updatedStructure =
-                                  Map<String, dynamic>.from(s);
+                              showDialog(
+                                context: context,
+                                barrierDismissible: false,
+                                builder: (_) => const Center(
+                                  child: CircularProgressIndicator(
+                                      color: Color(0xFFFF9800)),
+                                ),
+                              );
 
-                                  updatedStructure['nomStructure'] =
-                                      nomController.text.trim();
-                                  updatedStructure['typeStructure'] =
-                                      selectedType ?? '';
-                                  updatedStructure['descriptionStructure'] =
-                                      descController.text.trim();
-                                  updatedStructure['villeStructure'] =
-                                      selectedVille ?? '';
-                                  updatedStructure['codePoste'] =
-                                      cpController.text.trim();
-                                  updatedStructure['rueStructure'] =
-                                      rueController.text.trim();
-                                  updatedStructure['geoLocStructure'] =
-                                      gpsController.text.trim();
+                              Map<String, dynamic> updatedStructure =
+                              Map<String, dynamic>.from(s);
+                              updatedStructure['nomStructure'] =
+                                  nomController.text.trim();
+                              updatedStructure['typeStructure'] =
+                                  selectedType ?? '';
+                              updatedStructure['descriptionStructure'] =
+                                  descController.text.trim();
+                              updatedStructure['villeStructure'] =
+                                  selectedVille ?? '';
+                              updatedStructure['codePoste'] =
+                                  cpController.text.trim();
+                              updatedStructure['rueStructure'] =
+                                  rueController.text.trim();
+                              updatedStructure['geoLocStructure'] =
+                                  gpsController.text.trim();
 
-                                  if (selectedNewImage != null) {
-                                    updatedStructure['structPhotoUrl'] =
-                                        selectedNewImage!.path;
-                                  }
+                              if (selectedNewImage != null) {
+                                updatedStructure['structPhotoUrl'] =
+                                    selectedNewImage!.path;
+                              }
 
-                                  bool isUpdated = false;
-                                  try {
-                                    isUpdated = await _submitStructureUpdate(
-                                      id: id,
-                                      updatedStructure: updatedStructure,
-                                      imageFile: selectedNewImage,
-                                    );
-                                  } catch (networkError) {
-                                    debugPrint(
-                                        "Erreur réseau détectée lors de l'update : $networkError");
-                                    isUpdated = false;
-                                  }
+                              bool success = await _submitStructureUpdate(
+                                id: id,
+                                updatedStructure: updatedStructure,
+                                imageFile: selectedNewImage,
+                              );
 
-                                  if (isUpdated) {
-                                    // Rechargement uniquement depuis le serveur (Online-only)
-                                    await _loadStructures();
-                                  }
-
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(isUpdated
-                                            ? "Structure mise à jour avec succès !"
-                                            : "Échec de la mise à jour : Vérifiez votre connexion Internet."),
-                                        backgroundColor: isUpdated
-                                            ? Colors.green
-                                            : Colors.red,
-                                      ),
-                                    );
-                                  }
-                                } catch (e) {
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content:
-                                        Text("Erreur de modification : $e"),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
-                                  }
-                                } finally {
-                                  if (mounted) {
-                                    setState(() => isLoading = false);
-                                  }
+                              if (mounted) {
+                                Navigator.pop(context); // Ferme le loader
+                                if (success) {
+                                  Navigator.pop(ctx); // Ferme le dialogue
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          "Structure mise à jour avec succès ! 🎉"),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                  _checkNetworkAndLoad();
+                                } else {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          "Échec de la mise à jour ❌"),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
                                 }
                               }
                             },
@@ -892,15 +879,8 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.home_rounded, color: Color(0xFFFF9800), size: 26),
-            onPressed: () => Navigator.pushAndRemoveUntil(
-              context,
-              MaterialPageRoute(builder: (_) => const SubscriptionScreen()), // Remplacer par l'écran d'accueil ou HomeScreen si existant
-                  (r) => false,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF1E293B), size: 24),
+            icon: const Icon(Icons.refresh_rounded,
+                color: Color(0xFF1E293B), size: 24),
             onPressed: _checkNetworkAndLoad,
           ),
         ],
@@ -909,13 +889,19 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
         onPressed: () {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (context) => const SubscriptionScreen()),
+            MaterialPageRoute(
+              builder: (context) => const SubscriptionScreen(
+                structureId: '', // Corrected: Pass initial empty string or default id
+
+              ),
+            ),
           ).then((_) => _checkNetworkAndLoad());
         },
         backgroundColor: const Color(0xFFFF9800),
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text("Ajouter une structure",
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            style:
+            TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
       body: isLoading
           ? const Center(
@@ -929,18 +915,35 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(color: Colors.grey.shade100, shape: BoxShape.circle),
-                child: Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey.shade400),
+                decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    shape: BoxShape.circle),
+                child: Icon(Icons.cloud_off_rounded,
+                    size: 64, color: Colors.grey.shade400),
               ),
               const SizedBox(height: 24),
-              const Text("Aucun espace trouvé", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              const Text("Aucun espace trouvé",
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1E293B))),
               const SizedBox(height: 8),
-              const Text("Merci de vérifier votre connexion et de réessayer.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
+              const Text(
+                  "Merci de vérifier votre connexion et de réessayer.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Color(0xFF64748B),
+                      fontSize: 14,
+                      height: 1.4)),
               const SizedBox(height: 24),
               TextButton.icon(
                 onPressed: _checkNetworkAndLoad,
-                icon: const Icon(Icons.refresh_rounded, color: Color(0xFFFF9800)),
-                label: const Text("Réessayer", style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.bold)),
+                icon: const Icon(Icons.refresh_rounded,
+                    color: Color(0xFFFF9800)),
+                label: const Text("Réessayer",
+                    style: TextStyle(
+                        color: Color(0xFFFF9800),
+                        fontWeight: FontWeight.bold)),
               ),
             ],
           ),
@@ -958,18 +961,18 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
   }
 
   Widget _buildProCard(Map<String, dynamic> s) {
+    final String id =
+    (s['idStructure'] ?? s['id'] ?? s['structureId'] ?? '').toString();
     final String nom = s['nomStructure'] ?? s['nom'] ?? 'Structure sans nom';
     final String type =
-        s['typeStructure'] ?? s['nomType'] ?? s['type'] ?? 'Type non défini';
-    final String ville = s['villeStructure'] ??
-        s['nomVille'] ??
-        s['ville'] ??
-        'Ville non définie';
-    final String? photoPath = s['structPhotoUrl'] ??
+    _parseLabel(s['typeStructure'] ?? s['nomType'] ?? s['type']);
+    final String ville =
+    _parseLabel(s['villeStructure'] ?? s['nomVille'] ?? s['ville']);
+    final String? photoPath = _parseLabel(s['structPhotoUrl'] ??
         s['photoStructure'] ??
         s['photo'] ??
         s['logo'] ??
-        s['image'];
+        s['image']);
     final bool expired = _isExpired(s);
     final bool active =
         s['isActive'] == true || s['isActive'] == 1 || s['active'] == true;
@@ -1040,7 +1043,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      type,
+                      type.isNotEmpty ? type : "Non défini",
                       style: const TextStyle(
                           color: Colors.white,
                           fontSize: 11,
@@ -1090,7 +1093,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                           size: 16, color: Color(0xFFFF9800)),
                       const SizedBox(width: 4),
                       Text(
-                        ville,
+                        ville.isNotEmpty ? ville : "Ville non définie",
                         style: TextStyle(
                             color: Colors.grey.shade600, fontSize: 13),
                       ),
@@ -1129,61 +1132,36 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                     children: [
                       TextButton.icon(
                         style: TextButton.styleFrom(
-                          foregroundColor:
-                          expired ? Colors.orange : Colors.green,
+                          foregroundColor: expired ? Colors.orange : Colors.green,
                         ),
                         onPressed: () async {
-                          int currentPriority = int.tryParse(
-                              (s['priorite'] ?? s['priority'] ?? s['planPriority'] ?? '0').toString()
-                          ) ?? 0;
-
-                          final String structureId = (s['idStructure'] ?? s['id'] ?? s['structureId'] ?? '').toString();
+                          // 🔹 Récupération sécurisée de la priorité du plan actuel de la structure
+                          final dynamic rawPriority = s['priorite'] ?? s['priority'] ?? s['planPriorite'];
+                          final int? currentPriority = rawPriority != null
+                              ? int.tryParse(rawPriority.toString())
+                              : null;
 
                           final selectedPlan = await Navigator.push<SubscriptionPlan>(
                             context,
                             MaterialPageRoute(
                               builder: (_) => SubscriptionScreen(
-                                structureId: structureId,
-                                filterPriorite: currentPriority,
+                                structureId: id,
+                                filterPriorite: currentPriority, // 👈 Transmission de la priorité
                               ),
                             ),
                           );
 
-                          if (selectedPlan != null && mounted) {
-                            setState(() => isLoading = true);
-                            try {
-                              await _structureService.updateStructurePlan(structureId, selectedPlan.name);
-                              await _loadStructures();
-
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text("Réabonnement effectué avec succès !"),
-                                    backgroundColor: Colors.green,
-                                  ),
-                                );
-                              }
-                            } catch (e) {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text("Échec du réabonnement : $e"),
-                                    backgroundColor: Colors.red,
-                                  ),
-                                );
-                              }
-                            } finally {
-                              if (mounted) {
-                                setState(() => isLoading = false);
-                              }
-                            }
+                          if (selectedPlan != null) {
+                            // Traitement après sélection du plan si nécessaire
                           }
+
+                          _checkNetworkAndLoad();
                         },
-                        icon:
-                        const Icon(Icons.card_membership_rounded, size: 18),
-                        label: Text(expired ? "Renouveler" : "Abonnement",
-                            style:
-                            const TextStyle(fontWeight: FontWeight.bold)),
+                        icon: const Icon(Icons.card_membership_rounded, size: 18),
+                        label: Text(
+                          expired ? "Renouveler" : "Abonnement",
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
                       ),
                       Row(
                         children: [

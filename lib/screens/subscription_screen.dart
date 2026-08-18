@@ -5,7 +5,7 @@ import 'add_structure_screen.dart';
 
 class SubscriptionScreen extends StatefulWidget {
   final String? structureId;
-  final int? filterPriorite; // 🔹 Ajout du paramètre pour le filtrage par priorité
+  final int? filterPriorite;
 
   const SubscriptionScreen({
     super.key,
@@ -40,7 +40,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         centerTitle: true,
-        leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () => Navigator.pop(context),
+        ),
       ),
       body: FutureBuilder<List<SubscriptionPlan>>(
         future: _plansFuture,
@@ -53,21 +56,20 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
 
           List<SubscriptionPlan> plans = snapshot.data!;
 
-          // 🔹 Filtrage des plans si filterPriorite est fourni
+          // 🔹 Filtrage : conserve uniquement les plans de priorité inférieure ou égale
           if (widget.filterPriorite != null) {
             plans = plans.where((plan) {
-              // Ajustez 'plan.priority' ou 'plan.priorite' selon le nom exact de la propriété dans votre modèle SubscriptionPlan
               int planPriority = plan.priorite ?? 0;
-              return planPriority >= widget.filterPriorite!;
+              return planPriority <= widget.filterPriorite!;
             }).toList();
           }
-
+          plans.sort((a, b) => (a.priorite ?? 0).compareTo(b.priorite ?? 0));
           if (plans.isEmpty) {
             return const Center(
               child: Padding(
                 padding: EdgeInsets.all(20.0),
                 child: Text(
-                  "Aucun plan supérieur disponible pour le moment.",
+                  "Aucun plan égal ou inférieur disponible pour le moment.",
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 16, color: Colors.grey, fontWeight: FontWeight.bold),
                 ),
@@ -80,14 +82,23 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
             itemCount: plans.length,
             itemBuilder: (context, index) {
               final plan = plans[index];
-              final featureList = (plan.features ?? "").split(',').where((f) => f.trim().isNotEmpty).toList();
+              final featureList = (plan.features ?? "")
+                  .split(',')
+                  .where((f) => f.trim().isNotEmpty)
+                  .toList();
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 20),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
-                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2))],
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    )
+                  ],
                 ),
                 child: Material(
                   color: Colors.transparent,
@@ -95,12 +106,15 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                     borderRadius: BorderRadius.circular(16),
                     onTap: () async {
                       if (widget.structureId != null || widget.filterPriorite != null) {
-                        // 🔹 Retourne le plan sélectionné à l'écran précédent
                         Navigator.pop(context, plan);
                       } else {
-                        // 🔹 Cas de la création d'une nouvelle structure
                         Navigator.pop(context);
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => AddStructureScreen(plan: plan.name)));
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => AddStructureScreen(plan: plan.name),
+                          ),
+                        );
                       }
                     },
                     child: Padding(
@@ -108,7 +122,6 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Header du Plan
                           Row(
                             children: [
                               CircleAvatar(
@@ -120,28 +133,43 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(plan.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-                                    Text(plan.price, style: TextStyle(color: plan.color ?? Colors.orange, fontWeight: FontWeight.bold, fontSize: 14)),
+                                    Text(
+                                      plan.name.toUpperCase(),
+                                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+                                    ),
+                                    Text(
+                                      plan.price,
+                                      style: TextStyle(
+                                        color: plan.color ?? Colors.orange,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
                             ],
                           ),
                           const Divider(height: 30),
-                          // Liste des fonctionnalités
                           if (featureList.isNotEmpty)
-                            ...featureList.map((f) => Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.check, color: plan.color ?? Colors.orange, size: 18),
-                                  const SizedBox(width: 10),
-                                  Expanded(child: Text(f.trim(), style: TextStyle(color: Colors.grey.shade700))),
-                                ],
+                            ...featureList.map(
+                                  (f) => Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.check, color: plan.color ?? Colors.orange, size: 18),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        f.trim(),
+                                        style: TextStyle(color: Colors.grey.shade700),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            )),
+                            ),
                           const SizedBox(height: 15),
-                          // Bouton d'action
                           Container(
                             width: double.infinity,
                             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -150,7 +178,10 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: const Center(
-                              child: Text("SÉLECTIONNER CE PLAN", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              child: Text(
+                                "SÉLECTIONNER CE PLAN",
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                              ),
                             ),
                           )
                         ],

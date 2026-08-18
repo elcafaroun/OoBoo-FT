@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'package:fada/services/database/database_helper.dart';
+import 'package:fada/services/sync_service.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
@@ -139,6 +141,7 @@ class _AddStructureScreenState extends State<AddStructureScreen> {
     if (!isOnline || nameError != null || !_formKey.currentState!.validate()) return;
 
     setState(() => isLoading = true);
+
     try {
       final prefs = await SharedPreferences.getInstance();
       final String? userId = prefs.getString('userId');
@@ -147,10 +150,8 @@ class _AddStructureScreenState extends State<AddStructureScreen> {
         throw Exception("Utilisateur non identifié. Veuillez vous reconnecter.");
       }
 
-      // Construction URL avec le userId en Query Param pour le backend
       final String finalUrl = '$baseUrl/structure?userId=${Uri.encodeComponent(userId.trim())}';
-
-      final structureData = {
+      final Map<String, dynamic> structureData = {
         "nomStructure": nomCtrl.text.trim(),
         "typeStructure": _selectedTypeId,
         "descriptionStructure": descriptionCtrl.text.trim(),
@@ -164,27 +165,77 @@ class _AddStructureScreenState extends State<AddStructureScreen> {
       };
 
       final response = await http.post(
-          Uri.parse(finalUrl),
-          headers: {"Content-Type": "application/json"},
-          body: jsonEncode(structureData)
+        Uri.parse(finalUrl),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode(structureData),
       );
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        final decoded = jsonDecode(response.body);
-        final structureId = decoded['idStructure']?.toString();
+        final decodedStructure = jsonDecode(utf8.decode(response.bodyBytes));
+        final String? structureId = (decodedStructure['id'] ?? decodedStructure['idStructure'])?.toString();
 
         if (structureId != null && _selectedImage != null) {
-          final request = http.MultipartRequest("PUT", Uri.parse("$baseUrl/structure/photo"))
-            ..fields['id'] = structureId
-            ..files.add(await http.MultipartFile.fromPath('file', _selectedImage!.path));
-          await request.send();
+          try {
+            final request = http.MultipartRequest("PUT", Uri.parse("$baseUrl/structure/photo"))
+              ..fields['id'] = structureId
+              ..files.add(await http.MultipartFile.fromPath('file', _selectedImage!.path));
+
+            final photoResp = await request.send();
+            if (photoResp.statusCode == 200) {
+              final photoResponseBody = await photoResp.stream.bytesToString();
+              final photoData = jsonDecode(photoResponseBody);
+              if (photoData['structPhotoUrl'] != null) {
+                decodedStructure['structPhotoUrl'] = photoData['structPhotoUrl'];
+              }
+            }
+          } catch (e) {
+            debugPrint("⚠️ Échec d'envoi de l'image sur le serveur : $e");
+          }
         }
-        if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const StructuresScreen()));
+
+        final DatabaseHelper dbHelper = DatabaseHelper();
+        await dbHelper.syncStructuresLocal([decodedStructure]);
+
+        if (structureId != null) {
+          final Map<String, dynamic> userStructureRelation = {
+            'id': '${userId}_$structureId',
+            'user_id': userId,
+            'structure_id': structureId,
+            'role_in_structure': 'ADMIN',
+            'updated_at': DateTime.now().toIso8601String(),
+          };
+          await dbHelper.syncUserStructuresLocal([userStructureRelation]);
+
+          if (_selectedImage != null) {
+            await dbHelper.updateEntityPhotoPath('structures', structureId, _selectedImage!.path);
+          }
+        }
+
+        debugPrint("✅ Base SQLite locale mise à jour pour la structure : $structureId");
+
+        debugPrint("🚀 Lancement du Full Sync global...");
+        final SyncService syncService = SyncService();
+        await syncService.fullSynchronization(userId);
+
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const StructuresScreen()),
+          );
+        }
       } else {
-        throw Exception("Erreur ${response.statusCode}: ${response.body}");
+        throw Exception("Erreur serveur (${response.statusCode}) : ${response.body}");
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Erreur : $e")));
+      debugPrint("❌ Erreur dans handleSubmit : $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Échec de la création : $e"),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -206,103 +257,182 @@ class _AddStructureScreenState extends State<AddStructureScreen> {
       backgroundColor: const Color(0xFFF4F4F4),
       appBar: AppBar(
         title: const Text("NOUVELLE STRUCTURE", style: TextStyle(fontWeight: FontWeight.w900)),
-        centerTitle: true, backgroundColor: Colors.white, foregroundColor: Colors.black, elevation: 0,
+        centerTitle: true,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
       ),
-      body: Column(
+      body: Stack(
         children: [
-          if (!isOnline)
-            Container(
-              width: double.infinity, color: Colors.redAccent, padding: const EdgeInsets.symmetric(vertical: 8),
-              child: const Text("⚠️ Pas d'internet. Enregistrement désactivé.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  children: [
-                    GestureDetector(
-                      onTap: _pickImage,
-                      child: Container(
-                        width: double.infinity, height: 180,
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade300)),
-                        child: _selectedImage == null
-                            ? const Center(child: Text("AJOUTER UNE PHOTO"))
-                            : ClipRRect(borderRadius: BorderRadius.circular(16), child: Image.file(_selectedImage!, fit: BoxFit.cover)),
-                      ),
-                    ),
-                    const SizedBox(height: 25),
-                    TextFormField(
-                      controller: nomCtrl,
-                      focusNode: _nomFocusNode,
-                      decoration: _fieldStyle("NOM", Icons.storefront).copyWith(
-                        suffixIcon: isCheckingName
-                            ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
-                            : (nameError == null && nomCtrl.text.isNotEmpty ? const Icon(Icons.check_circle, color: Colors.green) : null),
-                        errorText: nameError,
-                      ),
-                      validator: (v) => (v == null || v.isEmpty) ? "Obligatoire" : nameError,
-                      onChanged: (val) { if(nameError != null) setState(() => nameError = null); },
-                    ),
-                    const SizedBox(height: 15),
-                    isTypesLoading
-                        ? const LinearProgressIndicator()
-                        : DropdownButtonFormField<String>(
-                      value: _selectedTypeId,
-                      decoration: _fieldStyle("TYPE", Icons.category),
-                      items: _typesStructures.map((t) => DropdownMenuItem<String>(value: t['id'].toString(), child: Text(t['nomType'] ?? "Type"))).toList(),
-                      onChanged: (val) => setState(() => _selectedTypeId = val),
-                    ),
-                    const SizedBox(height: 15),
-                    TextFormField(controller: descriptionCtrl, maxLines: 2, decoration: _fieldStyle("DESCRIPTION", Icons.description)),
-                    const SizedBox(height: 15),
-                    Row(
+          Column(
+            children: [
+              if (!isOnline)
+                Container(
+                  width: double.infinity,
+                  color: Colors.redAccent,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: const Text(
+                    "⚠️ Pas d'internet. Enregistrement désactivé.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
                       children: [
-                        Expanded(
-                          flex: 2,
-                          child: isVillesLoading
-                              ? const LinearProgressIndicator()
-                              : DropdownButtonFormField<String>(
-                            value: _selectedVille,
-                            decoration: _fieldStyle("VILLE", Icons.location_city),
-                            items: _villesStructures.map((v) => DropdownMenuItem<String>(value: v['nomVille'], child: Text(v['nomVille'] ?? "Ville"))).toList(),
-                            onChanged: (val) => setState(() => _selectedVille = val),
+                        GestureDetector(
+                          onTap: isLoading ? null : _pickImage,
+                          child: Container(
+                            width: double.infinity,
+                            height: 180,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: _selectedImage == null
+                                ? const Center(child: Text("AJOUTER UNE PHOTO"))
+                                : ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: Image.file(_selectedImage!, fit: BoxFit.cover),
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(child: TextFormField(controller: codePosteCtrl, decoration: _fieldStyle("C.P", Icons.mail))),
+                        const SizedBox(height: 25),
+                        TextFormField(
+                          controller: nomCtrl,
+                          focusNode: _nomFocusNode,
+                          enabled: !isLoading,
+                          decoration: _fieldStyle("NOM", Icons.storefront).copyWith(
+                            suffixIcon: isCheckingName
+                                ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
+                                : (nameError == null && nomCtrl.text.isNotEmpty ? const Icon(Icons.check_circle, color: Colors.green) : null),
+                            errorText: nameError,
+                          ),
+                          validator: (v) => (v == null || v.isEmpty) ? "Obligatoire" : nameError,
+                          onChanged: (val) { if(nameError != null) setState(() => nameError = null); },
+                        ),
+                        const SizedBox(height: 15),
+                        isTypesLoading
+                            ? const LinearProgressIndicator()
+                            : DropdownButtonFormField<String>(
+                          value: _selectedTypeId,
+                          decoration: _fieldStyle("TYPE", Icons.category),
+                          items: _typesStructures.map((t) => DropdownMenuItem<String>(value: t['id'].toString(), child: Text(t['nomType'] ?? "Type"))).toList(),
+                          onChanged: isLoading ? null : (val) => setState(() => _selectedTypeId = val),
+                        ),
+                        const SizedBox(height: 15),
+                        TextFormField(
+                          controller: descriptionCtrl,
+                          enabled: !isLoading,
+                          maxLines: 2,
+                          decoration: _fieldStyle("DESCRIPTION", Icons.description),
+                        ),
+                        const SizedBox(height: 15),
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 2,
+                              child: isVillesLoading
+                                  ? const LinearProgressIndicator()
+                                  : DropdownButtonFormField<String>(
+                                value: _selectedVille,
+                                decoration: _fieldStyle("VILLE", Icons.location_city),
+                                items: _villesStructures.map((v) => DropdownMenuItem<String>(value: v['nomVille'], child: Text(v['nomVille'] ?? "Ville"))).toList(),
+                                onChanged: isLoading ? null : (val) => setState(() => _selectedVille = val),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: TextFormField(
+                                controller: codePosteCtrl,
+                                enabled: !isLoading,
+                                decoration: _fieldStyle("C.P", Icons.mail),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 15),
+                        TextFormField(
+                          controller: rueCtrl,
+                          enabled: !isLoading,
+                          decoration: _fieldStyle("ADRESSE", Icons.map),
+                        ),
+                        const SizedBox(height: 15),
+                        TextFormField(
+                          controller: geoLocCtrl,
+                          readOnly: true,
+                          decoration: _fieldStyle("GPS", Icons.my_location).copyWith(
+                            suffixIcon: isGpsLoading
+                                ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
+                                : IconButton(icon: const Icon(Icons.gps_fixed), onPressed: isLoading ? null : _getCurrentLocation),
+                          ),
+                        ),
+                        const SizedBox(height: 30),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 55,
+                          child: ElevatedButton(
+                            onPressed: (isLoading || !isOnline || nameError != null) ? null : handleSubmit,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFFF9800),
+                              disabledBackgroundColor: Colors.grey.shade400,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                            ),
+                            child: const Text("ENREGISTRER", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 16)),
+                          ),
+                        ),
                       ],
                     ),
-                    const SizedBox(height: 15),
-                    TextFormField(controller: rueCtrl, decoration: _fieldStyle("ADRESSE", Icons.map)),
-                    const SizedBox(height: 15),
-                    TextFormField(
-                      controller: geoLocCtrl, readOnly: true,
-                      decoration: _fieldStyle("GPS", Icons.my_location).copyWith(
-                        suffixIcon: isGpsLoading ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2)) : IconButton(icon: const Icon(Icons.gps_fixed), onPressed: _getCurrentLocation),
-                      ),
-                    ),
-                    const SizedBox(height: 30),
-                    SizedBox(
-                      width: double.infinity, height: 55,
-                      child: ElevatedButton(
-                        onPressed: (isLoading || !isOnline || nameError != null) ? null : handleSubmit,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF9800),
-                          disabledBackgroundColor: Colors.grey.shade400,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // 🔄 LOADER SPINNER OVERLAY
+          if (isLoading)
+            Container(
+              color: Colors.black.withOpacity(0.55),
+              width: double.infinity,
+              height: double.infinity,
+              child: Center(
+                child: Card(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  elevation: 8,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        SizedBox(
+                          width: 45,
+                          height: 45,
+                          child: CircularProgressIndicator(
+                            color: Color(0xFFFF9800),
+                            strokeWidth: 4,
+                          ),
                         ),
-                        child: isLoading
-                            ? const CircularProgressIndicator(color: Colors.white)
-                            : const Text("ENREGISTRER", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-                      ),
+                        SizedBox(height: 20),
+                        Text(
+                          "Création et synchronisation...",
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                        ),
+                        SizedBox(height: 6),
+                        Text(
+                          "Veuillez patienter un instant",
+                          style: TextStyle(color: Colors.grey, fontSize: 12),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

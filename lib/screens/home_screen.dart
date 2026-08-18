@@ -19,6 +19,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _userName;
   String? _userProfile;
   String? _codeStructure;
+  String? _idStructure;
   String? _userId;
 
   String _lastSyncDateLabel = "Jamais";
@@ -50,41 +51,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _handleStartup() async {
-    setState(() => _isInitialSyncing = true);
+    //setState(() => _isInitialSyncing = true);
     try {
       final prefs = await SharedPreferences.getInstance();
       final String? savedUserId = prefs.getString('userId');
+    //  final String activeStructureId = prefs.getString('selected_structure_id') ?? _idStructure ?? "";
 
       if (savedUserId != null && savedUserId.isNotEmpty) {
-        // 1. Récupérer d'abord le profil pour savoir si c'est un administrateur
-        final userMap = await _dbHelper.getActiveUserLocal(savedUserId);
-        String profile = userMap != null ? (userMap['userProfile'] ?? '') : '';
-        bool isAdmin = profile.toLowerCase().contains("admin");
+        // 1. Charger d'abord les données locales de l'utilisateur pour alimenter l'interface instantanément
+        await _loadUserProfile();
 
-        if (isAdmin) {
-          debugPrint("👑 Profil Administrateur détecté : Mode online strict, pas de synchronisation locale.");
-          if (userMap != null) {
-            setState(() {
-              _userId = savedUserId;
-              _userName = userMap['userName'];
-              _userProfile = userMap['userProfile'];
-              _codeStructure = userMap['codeStructure'];
-            });
-          }
-        } else {
-          // 2. Comportement standard (Agents / Vente) : Tenter une synchronisation si réseau disponible
-          if (await NetworkChecker.isBackendAccessible()) {
-            debugPrint("🌐 Connexion détectée au démarrage, lancement de la synchro...");
-            final String structureId = prefs.getString('selected_structure_id') ?? "";
-            await _syncService.fullSynchronization(structureId, savedUserId);
+        // 2. Tenter une synchronisation globale au démarrage si le réseau est accessible
+        if (await NetworkChecker.isBackendAccessible()) {
+          debugPrint(
+              "🌐 Connexion détectée au démarrage, lancement de la synchro globale...");
+
+          // On récupère l'ID de structure sélectionné ou l'ID technique par défaut de l'utilisateur
+
+
+          final bool isFirstLoginDone = await _dbHelper.getSettingBool(
+              'first_login_completed', defaultValue: false);
+
+          if (!isFirstLoginDone) {
+            if (await NetworkChecker.isBackendAccessible()) {
+              debugPrint(" Premières connexion / initialisation détectée...");
+
+              // Exécution de la synchronisation ou action initiale
+              await _syncService.fullSynchronization(savedUserId);
+
+              // Passage de la variable à true pour ne plus repasser ici aux prochains démarrages
+              await _dbHelper.setSettingBool('first_login_completed', true);
+
+              // Recharger le profil après mise à jour
+              await _loadUserProfile();
+            } else {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _showSnackBar(
+                    "Mode hors-ligne : Première synchronisation en attente.",
+                    Colors.orange);
+              });
+            }
           } else {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _showSnackBar("Mode hors-ligne actif 🛰️.", Colors.blueGrey);
-            });
+            debugPrint(" Initialisation déjà effectuée précédemment.");
           }
 
-          // Charger ensuite les données depuis la base locale
-          await _loadUserProfile();
           await _loadLastSyncDate();
           await _refreshPendingCount();
         }
@@ -120,6 +130,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _userName = userMap['userName'];
           _userProfile = userMap['userProfile'];
           _codeStructure = userMap['codeStructure'];
+          // Récupération sécurisée de l'identifiant technique idStructure
+          _idStructure = userMap['idStructure']?.toString() ?? userMap['structureId']?.toString();
 
           final String? lastSync = userMap['updatedAt'];
           if (lastSync != null) {
@@ -142,12 +154,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _handleManualSync() async {
-    // Si c'est un admin, pas de synchro locale nécessaire
-    if (_userProfile != null && _userProfile!.toLowerCase().contains("admin")) {
-      _showSnackBar("Profil Administrateur : Fonctionnement direct en ligne ✅", Colors.blue);
-      return;
-    }
-
     bool online = await NetworkChecker.isBackendAccessible();
     if (!online) {
       _showSnackBar("Aucune connexion au serveur ❌", Colors.redAccent);
@@ -155,7 +161,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     _showSnackBar("Synchronisation en cours...", Colors.orange);
     try {
-      await _syncService.fullSynchronization(_codeStructure ?? "", _userId ?? "");
+      final prefs = await SharedPreferences.getInstance();
+      // Utilisation prioritaire de l'ID de structure stocké ou de _idStructure
+      final String activeStructureId = prefs.getString('selected_structure_id') ?? _idStructure ?? "";
+
+      // CORRECTION : On transmet bien l'idStructure et non le codeStructure
+      await _syncService.fullSynchronization(_userId ?? "");
+
       await _refreshPendingCount();
       await _loadUserProfile();
       _showSnackBar("Synchronisation réussie ✅", Colors.green);
@@ -210,7 +222,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
+   // await prefs.clear();
     if (mounted) {
       Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (route) => false);
     }
@@ -246,8 +258,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildMenuGrid() {
-    bool isAdmin = _userProfile != null && _userProfile!.toLowerCase().contains("admin");
-
     return Column(children: [
       Row(children: [
         Expanded(child: _buildMenuCard("Commencer", "Mes structures", Icons.storefront_rounded, Colors.orange, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StructuresScreen())).then((_) => _refreshPendingCount()))),
@@ -255,23 +265,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         Expanded(child: _buildMenuCard("Sécurité", "Code PIN", Icons.lock_outline, Colors.purple, _showChangePasswordDialog)),
       ]),
       const SizedBox(height: 15),
-      // Masque la carte de synchronisation si l'utilisateur est un administrateur
-      if (!isAdmin)
-        Row(children: [
-          Expanded(
-              child: _buildMenuCard(
-                  "Sync",
-                  _pendingSyncCount > 0
-                      ? "$_pendingSyncCount en attente"
-                      : "Dernière : $_lastSyncDateLabel",
-                  Icons.sync,
-                  Colors.blue,
-                  _handleManualSync
-              )
-          ),
-          const SizedBox(width: 15),
-          const Expanded(child: SizedBox.shrink()),
-        ]),
+      Row(children: [
+        Expanded(
+            child: _buildMenuCard(
+                "Sync",
+                _pendingSyncCount > 0
+                    ? "$_pendingSyncCount en attente"
+                    : "Dernière : $_lastSyncDateLabel",
+                Icons.sync,
+                Colors.blue,
+                _handleManualSync
+            )
+        ),
+        const SizedBox(width: 15),
+        const Expanded(child: SizedBox.shrink()),
+      ]),
     ]);
   }
 

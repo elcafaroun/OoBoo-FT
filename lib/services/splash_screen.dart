@@ -18,11 +18,18 @@ class NavigationService {
 
     List<dynamic> structures = [];
 
-    // Sécurité : Si pas de userId, on ne peut pas naviguer correctement
+    // Sécurité : Si pas de userId, redirection par défaut
     if (userId == null) {
       debugPrint("⚠️ NavigationService: userId est null");
       if (context.mounted) {
-        Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => const SubscriptionScreen()));
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const SubscriptionScreen(
+              structureId: ''
+            ),
+          ),
+        );
       }
       return;
     }
@@ -36,7 +43,7 @@ class NavigationService {
           structures = await _structureService.getStructuresByCode(codeStructure);
         }
 
-        // Si l'API renvoie des structures, on synchronise le cache local
+        // Si l'API renvoie des structures, synchronisation du cache local
         if (structures.isNotEmpty) {
           await _dbHelper.syncStructuresLocal(structures);
         }
@@ -46,14 +53,18 @@ class NavigationService {
 
       // 2. BASCULE (FALLBACK) : Recherche filtrée par l'ID utilisateur en local
       if (structures.isEmpty) {
-        // MISE À JOUR : On utilise le userId pour vérifier l'existence locale
         structures = await _dbHelper.getLocalStructuresByUser(userId);
         debugPrint("📂 SQLite : ${structures.length} structure(s) pour l'utilisateur $userId");
       }
 
+      // Récupération de l'ID de la première structure si disponible
+      final String currentStructureId = (structures.isNotEmpty && structures.first['id'] != null)
+          ? structures.first['id'].toString()
+          : (codeStructure ?? '');
+
       // 3. LOGIQUE DE NAVIGATION
       if (context.mounted) {
-        // Si l'utilisateur a au moins une structure (trouvée en ligne ou en local)
+        // Si l'utilisateur a au moins une structure (en ligne ou en local)
         // OU s'il a un codeStructure (cas des employés/vendeurs)
         if (structures.isNotEmpty || (codeStructure != null && codeStructure.isNotEmpty)) {
           Navigator.pushAndRemoveUntil(
@@ -62,10 +73,14 @@ class NavigationService {
                 (route) => false,
           );
         } else {
-          // Cas où l'utilisateur n'a absolument rien créé encore
+          // Cas où l'utilisateur n'a encore aucune structure
           Navigator.pushAndRemoveUntil(
             context,
-            MaterialPageRoute(builder: (context) => const SubscriptionScreen()),
+            MaterialPageRoute(
+              builder: (context) => SubscriptionScreen(
+                structureId: currentStructureId,
+              ),
+            ),
                 (route) => false,
           );
         }
@@ -73,7 +88,7 @@ class NavigationService {
     } catch (e) {
       debugPrint("❌ Erreur fatale lors de la redirection : $e");
       if (context.mounted) {
-        // Par défaut, on tente le Home pour ne pas bloquer l'utilisateur inutilement
+        // Par défaut, on tente le Home pour ne pas bloquer l'utilisateur
         Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(builder: (context) => const HomeScreen()),

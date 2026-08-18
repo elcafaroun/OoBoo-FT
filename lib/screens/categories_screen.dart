@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:fada/screens/home_screen.dart';
 import 'package:fada/screens/notifications_screen.dart';
 import 'package:fada/screens/scanner_screen.dart';
 import 'package:fada/services/network_checker.dart';
@@ -6,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/category_service.dart';
 import '../services/product_service.dart';
+import '../services/command_service.dart';
 import '../services/database/database_helper.dart';
 import '../providers/cart_provider.dart';
 import '../utils/constants.dart';
@@ -23,136 +26,135 @@ class CategoriesScreen extends StatefulWidget {
   State<CategoriesScreen> createState() => _CategoriesScreenState();
 }
 
-class _CategoriesScreenState extends State<CategoriesScreen> {
+class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBindingObserver {
   int _alertCount = 0;
 
   final CategoryService _categoryService = CategoryService();
   final ProductService _productService = ProductService();
+  final CommandService _commandService = CommandService();
   final DatabaseHelper _dbHelper = DatabaseHelper();
   final TextEditingController _searchController = TextEditingController();
 
   List<dynamic> categories = [];
   List<dynamic> allProducts = [];
   List<dynamic> filteredProducts = [];
+  List<dynamic> allOrders = [];
 
   String selectedCategoryId = "TOUS";
   bool isLoading = true;
+  bool isOfflineMode = false;
   String? userProfile;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
     _searchController.addListener(_onSearchChanged);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 🔄 Rafraîchit les commandes dès que l'application repasse au premier plan
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshOrdersOnly();
+    }
+  }
+
+  /// 🔢 Calcul dynamique du nombre de commandes avec le statut PENDING
+  int get _pendingOrdersCount {
+    return allOrders.where((order) {
+      String status = (order['status'] ?? 'PENDING').toString().toUpperCase();
+      return status == 'PENDING';
+    }).length;
   }
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
     userProfile = prefs.getString('userProfile');
-    final String profileLower = userProfile?.toLowerCase() ?? '';
-    bool isAdminOrSuperAdmin = profileLower.contains("admin") || profileLower.contains("super_admin") || profileLower.contains("super admin");
 
-    if (isAdminOrSuperAdmin) {
-      debugPrint("👑 Profil Admin/Super Admin : Vérification de la connexion requise.");
+    // 1. CHARGEMENT IMMÉDIAT ET INCONDITIONNEL DE LA BASE LOCALE (SQLite)
+    await _loadFromLocalDatabase();
 
-      bool isOnline = false;
-      try {
-        isOnline = await NetworkChecker.isBackendAccessible();
-      } catch (e) {
-        debugPrint("❌ Erreur de vérification réseau : $e");
+    // 2. ESSAI DE SYNCHRONISATION ARRIÈRE-PLAN (Sans bloquer si hors-ligne)
+    await _syncWithBackendIfOnline();
+  }
+
+  /// Chargement des données locales
+  Future<void> _loadFromLocalDatabase() async {
+    try {
+      final localCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
+      final localProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
+      final localAlerts = await _dbHelper.getProductsInAlert(widget.structureId);
+      final localOrders = await _dbHelper.getLocalCommands(widget.structureId);
+
+      if (mounted) {
+        setState(() {
+          categories = localCats;
+          allProducts = localProds;
+          filteredProducts = localProds;
+          _alertCount = localAlerts.length;
+          allOrders = localOrders;
+          isLoading = false;
+        });
       }
-
-      if (!isOnline) {
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-            categories = [];
-            allProducts = [];
-            filteredProducts = [];
-            _alertCount = 0;
-          });
-        }
-        return;
-      }
-
-      try {
-        final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId);
-        final remoteProds = await _productService.getProductsByStructure(widget.structureId);
-
-        // Pour les admins en ligne, on peut synchroniser temporairement ou calculer directement sur les produits distants
-        // Si _dbHelper gère l'enregistrement, ou si vous préférez utiliser getProductsInAlert après sync :
-        await _dbHelper.syncCategoriesLocal(remoteCats);
-        await _dbHelper.syncProductsLocal(remoteProds);
-        final adminAlerts = await _dbHelper.getProductsInAlert(widget.structureId);
-
-        if (mounted) {
-          setState(() {
-            categories = remoteCats;
-            allProducts = remoteProds;
-            filteredProducts = remoteProds;
-            _alertCount = adminAlerts.length;
-            isLoading = false;
-          });
-        }
-        return;
-      } catch (e) {
-        debugPrint("❌ Erreur chargement online admin/super admin : $e");
-        if (mounted) {
-          setState(() {
-            isLoading = false;
-            categories = [];
-            allProducts = [];
-            filteredProducts = [];
-            _alertCount = 0;
-          });
-        }
-        return;
+    } catch (e) {
+      debugPrint("⚠️ Erreur lors de la lecture SQLite locale : $e");
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
       }
     }
+  }
 
-    // Comportement standard (Non-admin) : Chargement local d'abord puis tentative de synchro
-    final localCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
-    final localProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
-    final localAlerts = await _dbHelper.getProductsInAlert(widget.structureId);
+  /// Synchronisation silencieuse avec le backend si le réseau est dispo
+  Future<void> _syncWithBackendIfOnline() async {
+    bool hasConnection = await NetworkChecker.isBackendAccessible();
 
+    if (!mounted) return;
+
+    setState(() {
+      isOfflineMode = !hasConnection;
+    });
+
+    if (hasConnection) {
+      try {
+        final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId).timeout(const Duration(seconds: 8));
+        final remoteProds = await _productService.getProductsByStructure(widget.structureId).timeout(const Duration(seconds: 8));
+        final remoteOrders = await _commandService.getCommandsByStructure(widget.structureId).timeout(const Duration(seconds: 8));
+
+        await _dbHelper.syncCategoriesLocal(remoteCats);
+        await _dbHelper.syncProductsLocal(remoteProds);
+        await _dbHelper.syncCommandsLocal(remoteOrders);
+
+        // Rechargement des données fraîches depuis SQLite après synchro
+        await _loadFromLocalDatabase();
+      } catch (e) {
+        debugPrint("⚠️ Synchronisation échouée, passage en mode hors-ligne : $e");
+        if (mounted) {
+          setState(() {
+            isOfflineMode = true;
+          });
+        }
+      }
+    }
+  }
+
+  /// 🔄 Méthode spécifique pour rafraîchir uniquement les commandes depuis la DB locale
+  Future<void> _refreshOrdersOnly() async {
+    final localOrders = await _dbHelper.getLocalCommands(widget.structureId);
     if (mounted) {
       setState(() {
-        categories = localCats;
-        allProducts = localProds;
-        filteredProducts = localProds;
-        _alertCount = localAlerts.length;
-        isLoading = false;
+        allOrders = localOrders;
       });
-    }
-
-    if (await NetworkChecker.isBackendAccessible()) {
-      try {
-        final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId);
-        final remoteProds = await _productService.getProductsByStructure(widget.structureId);
-        await _dbHelper.syncCategoriesLocal(remoteCats);
-        await _dbHelper.syncProductsLocal(remoteProds);
-
-        final updatedCats = await _dbHelper.getCategoriesByStructureLocal(widget.structureId);
-        final updatedProds = await _dbHelper.getProductsByStructureLocal(widget.structureId);
-        final updatedAlerts = await _dbHelper.getProductsInAlert(widget.structureId);
-
-        if (mounted && updatedCats.isNotEmpty) {
-          setState(() {
-            categories = updatedCats;
-            allProducts = updatedProds;
-            _alertCount = updatedAlerts.length;
-            _onSearchChanged();
-          });
-        }
-      } catch (e) {
-        debugPrint("Erreur synchro : $e");
-      }
     }
   }
 
@@ -191,7 +193,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     return IconButton(
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(),
-      icon: Icon(icon, size: 28),
+      icon: Icon(icon, size: 26),
       color: Colors.black,
       onPressed: onPressed,
     );
@@ -199,57 +201,66 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final String profileLower = userProfile?.toLowerCase() ?? '';
-    bool isAdminOrSuperAdmin = profileLower.contains("admin") || profileLower.contains("super_admin") || profileLower.contains("super admin");
-
-    bool isOfflineAdmin = isAdminOrSuperAdmin && !isLoading && categories.isEmpty && allProducts.isEmpty;
+    bool isTrulyEmpty = !isLoading && categories.isEmpty && allProducts.isEmpty;
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9F7F2),
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: Color(0xFF1E293B)),
-        title: const Text(
-          "Articles",
-          style: TextStyle(
-            color: Color(0xFF1E293B),
-            fontWeight: FontWeight.bold,
-            letterSpacing: 0.3,
+        // ✅ FLÈCHE DE RETOUR TOUJOURS ACCESSIBLE
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black87, size: 22),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        titleSpacing: 0,
+        title: isTrulyEmpty
+            ? Text(
+          widget.structureName.isNotEmpty ? widget.structureName : "Catalogue",
+          style: const TextStyle(color: Colors.black87, fontSize: 18, fontWeight: FontWeight.bold),
+        )
+            : Padding(
+          padding: const EdgeInsets.only(right: 8.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildActionButton(Icons.qr_code_scanner, _scanAndFindProduct),
+              Badge(
+                isLabelVisible: _pendingOrdersCount > 0,
+                label: Text("$_pendingOrdersCount", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                backgroundColor: Colors.orange,
+                child: _buildActionButton(
+                  Icons.receipt_long_outlined,
+                      () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const OrdersScreen()),
+                    );
+                    await _refreshOrdersOnly();
+                  },
+                ),
+              ),
+              _buildCartBadge(),
+              IconButton(
+                icon: const Icon(Icons.home_rounded, color: Color(0xFFFF9800), size: 26),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onPressed: () {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const HomeScreen()),
+                        (route) => false,
+                  );
+                },
+              ),
+            ],
           ),
         ),
-        actions: isOfflineAdmin
-            ? null
-            : [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildActionButton(Icons.qr_code_scanner, _scanAndFindProduct),
-                const SizedBox(width: 16),
-                _buildActionButton(Icons.receipt_long_outlined, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersScreen()))),
-                const SizedBox(width: 16),
-                _buildCartBadge(),
-                const SizedBox(width: 16),
-                IconButton(
-                  icon: const Icon(Icons.home_rounded, color: Color(0xFFFF9800), size: 26),
-                  onPressed: () => Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (_) => const OrdersScreen()),
-                        (r) => false,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
       body: SafeArea(
         child: isLoading
             ? const Center(child: CircularProgressIndicator(color: Colors.orange))
-            : isOfflineAdmin
+            : isTrulyEmpty
             ? Center(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 40),
@@ -262,19 +273,44 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                   child: Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey.shade400),
                 ),
                 const SizedBox(height: 24),
-                const Text("Connexion requise", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                const Text("Aucune donnée disponible", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
                 const SizedBox(height: 8),
-                const Text("En tant qu'administrateur, veuillez vérifier votre connexion internet pour accéder à cet espace.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
+                const Text(
+                  "Connectez-vous à Internet au moins une fois pour télécharger le catalogue de cette structure.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4),
+                ),
                 const SizedBox(height: 24),
-                TextButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      isLoading = true;
-                    });
-                    _loadData();
-                  },
-                  icon: const Icon(Icons.refresh_rounded, color: Color(0xFFFF9800)),
-                  label: const Text("Réessayer", style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.bold)),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // ✅ BOUTON RETOUR DIRECT
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        side: BorderSide(color: Colors.grey.shade400),
+                      ),
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.arrow_back, size: 18, color: Colors.black87),
+                      label: const Text("Retour", style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
+                    ),
+                    const SizedBox(width: 12),
+                    // ✅ BOUTON RÉESSAYER
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF9800),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          isLoading = true;
+                        });
+                        _loadData();
+                      },
+                      icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 18),
+                      label: const Text("Réessayer", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -282,6 +318,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         )
             : Column(
           children: [
+            if (isOfflineMode) _buildOfflineBanner(),
             _buildStructureHeader(),
             _buildSearchBar(),
             _buildCategoryList(),
@@ -290,6 +327,26 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Bandeau indiquant le fonctionnement hors-ligne
+  Widget _buildOfflineBanner() {
+    return Container(
+      width: double.infinity,
+      color: Colors.amber.shade800,
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.wifi_off_rounded, color: Colors.white, size: 14),
+          SizedBox(width: 6),
+          Text(
+            "Mode Hors-Ligne (Données locales)",
+            style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
+          ),
+        ],
       ),
     );
   }
@@ -358,7 +415,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         decoration: InputDecoration(
           hintText: "Rechercher un produit...",
           prefixIcon: const Icon(Icons.search, color: Colors.grey),
-          filled: true, fillColor: Colors.white,
+          filled: true,
+          fillColor: Colors.white,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
         ),
       ),
@@ -386,15 +444,23 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           }
 
           return GestureDetector(
-            onTap: () { setState(() => selectedCategoryId = catId); _onSearchChanged(); },
+            onTap: () {
+              setState(() => selectedCategoryId = catId);
+              _onSearchChanged();
+            },
             child: Container(
               width: 75,
               margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
               child: Column(
                 children: [
                   Container(
-                    height: 60, width: 60,
-                    decoration: BoxDecoration(shape: BoxShape.circle, color: isSelected ? Colors.orange : Colors.white, border: Border.all(color: isSelected ? Colors.orange : Colors.grey.shade200, width: 2)),
+                    height: 60,
+                    width: 60,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isSelected ? Colors.orange : Colors.white,
+                      border: Border.all(color: isSelected ? Colors.orange : Colors.grey.shade200, width: 2),
+                    ),
                     child: Center(
                       child: isAll
                           ? Icon(Icons.apps, color: isSelected ? Colors.white : Colors.grey)
@@ -408,7 +474,12 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                       ),
                     ),
                   ),
-                  Text(isAll ? "Tout" : categories[index - 1]['nameCat'] ?? '', style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500), textAlign: TextAlign.center, maxLines: 1),
+                  Text(
+                    isAll ? "Tout" : categories[index - 1]['nameCat'] ?? '',
+                    style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                  ),
                 ],
               ),
             ),
@@ -421,7 +492,12 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   Widget _buildProductGrid() {
     return GridView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 0.75, crossAxisSpacing: 16, mainAxisSpacing: 16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        childAspectRatio: 0.75,
+        crossAxisSpacing: 16,
+        mainAxisSpacing: 16,
+      ),
       itemCount: filteredProducts.length,
       itemBuilder: (context, index) {
         final p = filteredProducts[index];
@@ -429,16 +505,40 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         return GestureDetector(
           onTap: () => _showFullDetails(p, imageUrl),
           child: Container(
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10)]),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10)],
+            ),
             child: Column(
               children: [
                 Expanded(
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                    child: ProductImageWidget(key: ValueKey("${p['id']}_${p['photoPath'] ?? 'no_path'}"), localPath: p['photoPath'], networkUrl: imageUrl),
+                    child: ProductImageWidget(
+                      key: ValueKey("${p['id']}_${p['photoPath'] ?? 'no_path'}"),
+                      localPath: p['photoPath'],
+                      networkUrl: imageUrl,
+                    ),
                   ),
                 ),
-                Padding(padding: const EdgeInsets.all(12), child: Column(children: [Text(p['productName'] ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)), Text("${p['productPrice']} FCFA", style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w900))])),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: [
+                      Text(
+                        p['productName'] ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        "${p['productPrice']} FCFA",
+                        style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w900),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -454,29 +554,77 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => SafeArea(
-        child: StatefulBuilder(builder: (context, setModalState) {
-          return Container(
-            height: MediaQuery.of(context).size.height * 0.85,
-            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
-            child: Column(
-              children: [
-                ProductImageWidget(localPath: p['photoPath'], networkUrl: imageUrl, height: 300, width: double.infinity, borderRadius: const BorderRadius.vertical(top: Radius.circular(30))),
-                Padding(
+        child: StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+              ),
+              child: Column(
+                children: [
+                  ProductImageWidget(
+                    localPath: p['photoPath'],
+                    networkUrl: imageUrl,
+                    height: 300,
+                    width: double.infinity,
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+                  ),
+                  Padding(
                     padding: const EdgeInsets.all(25),
                     child: Column(
-                        children: [
-                          Row(children: [Expanded(child: Text(p['productName'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))), Text("${p['productPrice']} FCFA", style: const TextStyle(fontSize: 20, color: Colors.orange, fontWeight: FontWeight.w900))]),
-                          const SizedBox(height: 20),
-                          Row(mainAxisAlignment: MainAxisAlignment.center, children: [IconButton(icon: const Icon(Icons.remove_circle_outline), onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null), Padding(padding: const EdgeInsets.symmetric(horizontal: 20), child: Text("$quantity", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))), IconButton(icon: const Icon(Icons.add_circle_outline, color: Colors.orange), onPressed: () => setModalState(() => quantity++))]),
-                          const SizedBox(height: 20),
-                          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, minimumSize: const Size(double.infinity, 55)), onPressed: () { Provider.of<CartProvider>(context, listen: false).addItem(p['id'].toString(), p['productName'], (p['productPrice'] as num).toDouble(), imageUrl, quantity); Navigator.pop(context); }, child: const Text("AJOUTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-                        ]
-                    )
-                ),
-              ],
-            ),
-          );
-        }),
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(child: Text(p['productName'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
+                            Text("${p['productPrice']} FCFA", style: const TextStyle(fontSize: 20, color: Colors.orange, fontWeight: FontWeight.w900)),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.remove_circle_outline),
+                              onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null,
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 20),
+                              child: Text("$quantity", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.add_circle_outline, color: Colors.orange),
+                              onPressed: () => setModalState(() => quantity++),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.orange,
+                            minimumSize: const Size(double.infinity, 55),
+                          ),
+                          onPressed: () {
+                            Provider.of<CartProvider>(context, listen: false).addItem(
+                              p['id'].toString(),
+                              p['productName'],
+                              (p['productPrice'] as num).toDouble(),
+                              imageUrl,
+                              quantity,
+                            );
+                            Navigator.pop(context);
+                          },
+                          child: const Text("AJOUTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -491,7 +639,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         child: IconButton(
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(),
-          icon: const Icon(Icons.shopping_cart_outlined, size: 28),
+          icon: const Icon(Icons.shopping_cart_outlined, size: 26),
           color: Colors.black,
           onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CartScreen())),
         ),

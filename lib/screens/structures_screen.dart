@@ -41,6 +41,7 @@ class _StructuresScreenState extends State<StructuresScreen> {
     await fetchStructures();
   }
 
+
   Future<void> fetchStructures() async {
     if (!mounted) return;
     setState(() => isRefreshing = true);
@@ -48,45 +49,43 @@ class _StructuresScreenState extends State<StructuresScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final String? userId = prefs.getString('userId');
-      if (userId == null) return;
+      debugPrint("🔑 SharedPreferences userId : '$userId'");
 
-      bool isAdmin = userProfile != null && userProfile!.toLowerCase().contains("admin");
-
-      if (isAdmin) {
-        debugPrint("👑 Profil Administrateur : Mode 100% online, pas de base locale pour les structures.");
-
-        if (await NetworkChecker.isBackendAccessible()) {
-          try {
-            await _syncService.fullSynchronization("", userId);
-          } catch (e) {
-            debugPrint("Erreur récupération online admin : $e");
-          }
-        }
-      } else {
+      if (userId == null) {
+        debugPrint("❌ ABANDON : userId est NULL dans SharedPreferences");
+        if (mounted) setState(() { isLoading = false; isRefreshing = false; });
+        return;
+      }
+/*
+      if (await NetworkChecker.isBackendAccessible()) {
         try {
-          await _syncService.fullSynchronization("", userId);
-        } catch (apiError) {
-          debugPrint("🌐 Mode hors ligne : $apiError");
+          await _syncService.fullSynchronization(userId);
+        } catch (e) {
+          debugPrint("⚠️ Erreur synchro : $e");
         }
+      } */
+
+      // 1. Récupération directe de TOUTES les lignes sans filtre utilisateur pour tester
+      final db = await _dbHelper.database; // Ou la méthode d'accès à l'instance
+      final List<Map<String, dynamic>> allTableData = await db.query('structures');
+      debugPrint("📊 TOTAL absolu de lignes dans la table structures : ${allTableData.length}");
+      if (allTableData.isNotEmpty) {
+        debugPrint("🔍 Exemple première ligne SQLite : ${allTableData.first}");
       }
 
+      // 2. Requête filtrée par userId
       final List<Map<String, dynamic>> rawData = await _dbHelper.getLocalStructuresByUser(userId);
-
-      final filteredData = rawData.where((s) {
-        debugPrint("🔍 Structure ID ${s['id']} | Nom: ${s['nomStructure']} | isActive: ${s['isActive']} (type: ${s['isActive'].runtimeType})");
-        final dynamic activeField = s['active'] ?? s['isActive'];
-        return (activeField == true || activeField.toString() == '1' || activeField.toString().toLowerCase() == 'true');
-      }).toList();
+      debugPrint("📦 Structures retournées par getLocalStructuresByUser('$userId') : ${rawData.length}");
 
       if (mounted) {
         setState(() {
-          allStructures = filteredData;
+          allStructures = rawData; // Désactivation temporaire du filter isActive
           isLoading = false;
           isRefreshing = false;
         });
       }
     } catch (e) {
-      debugPrint("❌ Erreur : $e");
+      debugPrint("❌ Erreur critique fetchStructures : $e");
       if (mounted) setState(() { isLoading = false; isRefreshing = false; });
     }
   }
@@ -116,7 +115,9 @@ class _StructuresScreenState extends State<StructuresScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final bool canAccessAdmin = userProfile != null && userProfile!.toLowerCase().contains("admin");
+    // Vérification élargie pour inclure admin, super_admin, etc.
+    final bool canAccessAdmin = userProfile != null &&
+        (userProfile!.toLowerCase().contains("admin") || userProfile!.toLowerCase().contains("super"));
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
@@ -230,7 +231,7 @@ class _StructuresScreenState extends State<StructuresScreen> {
             const SizedBox(height: 24),
             const Text("Aucun espace trouvé", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
             const SizedBox(height: 8),
-            const Text("Merci de vérifier votre connexion et de réessayer.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
+            const Text("Vérifiez que vous avez déjà effectué une synchronisation en ligne au moins une fois.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
             const SizedBox(height: 24),
             TextButton.icon(
               onPressed: isRefreshing ? null : fetchStructures,

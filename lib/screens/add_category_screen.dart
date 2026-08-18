@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:fada/services/cat_service.dart';
+import 'package:fada/screens/mon_espace_screen.dart';
 
 class AddCategoryScreen extends StatefulWidget {
   final String structureId;
@@ -19,7 +20,7 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
   final _descriptionController = TextEditingController();
   final CatService _catService = CatService();
 
-  // 🔹 Nouveaux états pour le doublon et la connexion
+  // 🔹 États pour le doublon et la connexion
   final FocusNode _nameFocusNode = FocusNode();
   String? _nameError;
   bool _isCheckingName = false;
@@ -37,7 +38,9 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
 
     // Surveiller la connexion
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((results) {
-      setState(() => _isOnline = !results.contains(ConnectivityResult.none));
+      if (mounted) {
+        setState(() => _isOnline = !results.contains(ConnectivityResult.none));
+      }
     });
 
     // 🔹 Écouter quand l'utilisateur quitte le champ Nom pour vérifier le doublon
@@ -59,7 +62,9 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
 
   Future<void> _checkConnectivity() async {
     final result = await Connectivity().checkConnectivity();
-    setState(() => _isOnline = !result.contains(ConnectivityResult.none));
+    if (mounted) {
+      setState(() => _isOnline = !result.contains(ConnectivityResult.none));
+    }
   }
 
   // 🔹 Fonction de vérification du doublon
@@ -78,19 +83,21 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
         widget.structureId,
       );
 
-      setState(() {
-        if (exists) {
-          _nameError = "Cette catégorie existe déjà dans votre boutique ❌";
-          _isNameValid = false;
-        } else {
-          _nameError = null;
-          _isNameValid = true; // Affiche le check vert
-        }
-      });
+      if (mounted) {
+        setState(() {
+          if (exists) {
+            _nameError = "Cette catégorie existe déjà dans votre boutique ❌";
+            _isNameValid = false;
+          } else {
+            _nameError = null;
+            _isNameValid = true;
+          }
+        });
+      }
     } catch (e) {
       debugPrint("Erreur validation: $e");
     } finally {
-      setState(() => _isCheckingName = false);
+      if (mounted) setState(() => _isCheckingName = false);
     }
   }
 
@@ -99,8 +106,72 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
     if (img != null) setState(() => _imageFile = File(img.path));
   }
 
+  // 🔹 Navigation vers MonEspaceScreen
+  void _navigateToMonEspace() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const MonEspaceScreen(),
+      ),
+    );
+  }
+
+  // 🔹 Dialogue d'alerte limite atteinte
+  void _showLimitReachedDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext ctx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+              SizedBox(width: 10),
+              Text(
+                "Limite atteinte",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+            ],
+          ),
+          content: const Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Le nombre maximum de catégories est atteint.",
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+              SizedBox(height: 10),
+              Text(
+                "Merci de modifier votre plan dans votre espace ou de contacter l'équipe technique.",
+                style: TextStyle(fontSize: 14, color: Colors.black87),
+              ),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF9800),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _navigateToMonEspace();
+              },
+              child: const Text(
+                "FERMER",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _saveCategory() async {
-    // Bloquer si hors-ligne ou si le nom est un doublon
     if (!_isOnline || _nameError != null) return;
     if (!_formKey.currentState!.validate()) return;
 
@@ -120,18 +191,27 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Catégorie ajoutée !"), backgroundColor: Colors.green)
+          const SnackBar(content: Text("Catégorie ajoutée !"), backgroundColor: Colors.green),
         );
         Navigator.pop(context);
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Erreur: $e"), backgroundColor: Colors.red));
+      if (mounted) {
+        String errorMsg = e.toString().replaceAll("Exception: ", "");
+
+        if (errorMsg.contains("Limite atteinte") || errorMsg.contains("maximum")) {
+          _showLimitReachedDialog();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Erreur: $errorMsg"), backgroundColor: Colors.red),
+          );
+        }
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // Style des champs avec indicateur de succès/chargement
   InputDecoration _inputStyle(String label, IconData icon, {bool isChecking = false, bool isValid = false, String? error}) {
     return InputDecoration(
       labelText: label,
@@ -141,9 +221,20 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
           ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
           : (isValid ? const Icon(Icons.check_circle, color: Colors.green) : null),
       filled: true,
-      fillColor: Colors.white,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide(color: Colors.grey.shade300)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: const BorderSide(color: Color(0xFFFF9800), width: 2)),
+      fillColor: const Color(0xFFFAFAFA),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade300),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: Colors.grey.shade200),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFFF9800), width: 1.5),
+      ),
     );
   }
 
@@ -153,15 +244,22 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
       backgroundColor: const Color(0xFFF9F7F2),
       appBar: AppBar(
         title: const Text("Ajouter une catégorie", style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.white, foregroundColor: Colors.black, elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
       ),
       body: Column(
         children: [
-          // Bandeau d'alerte connexion
           if (!_isOnline)
             Container(
-              width: double.infinity, color: Colors.redAccent, padding: const EdgeInsets.symmetric(vertical: 8),
-              child: const Text("⚠️ Mode hors-ligne. Enregistrement impossible.", textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 12)),
+              width: double.infinity,
+              color: Colors.redAccent,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: const Text(
+                "⚠️ Mode hors-ligne. Enregistrement impossible.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white, fontSize: 12),
+              ),
             ),
 
           Expanded(
@@ -169,54 +267,106 @@ class _AddCategoryScreenState extends State<AddCategoryScreen> {
               padding: const EdgeInsets.all(20),
               child: Form(
                 key: _formKey,
-                child: Column(
-                  children: [
-                    GestureDetector(
-                      onTap: _pickImage,
-                      child: Container(
-                        height: 160, width: double.infinity,
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.grey.shade300)),
-                        child: _imageFile == null
-                            ? const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.camera_enhance, color: Colors.orange, size: 40), Text("Photo")])
-                            : ClipRRect(borderRadius: BorderRadius.circular(18), child: Image.file(_imageFile!, fit: BoxFit.cover)),
+                child: Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.grey.shade200),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.03),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
                       ),
-                    ),
-                    const SizedBox(height: 25),
-
-                    TextFormField(
-                      controller: _nameController,
-                      focusNode: _nameFocusNode,
-                      decoration: _inputStyle("Nom", Icons.category, isChecking: _isCheckingName, isValid: _isNameValid, error: _nameError),
-                      validator: (v) => (v == null || v.isEmpty) ? "Requis" : _nameError,
-                      onChanged: (val) {
-                        if (_nameError != null) setState(() => _nameError = null);
-                      },
-                    ),
-                    const SizedBox(height: 20),
-                    TextFormField(
-                      controller: _descriptionController,
-                      maxLines: 3,
-                      decoration: _inputStyle("Description", Icons.notes),
-                    ),
-                    const SizedBox(height: 35),
-
-                    SizedBox(
-                      width: double.infinity, height: 55,
-                      child: ElevatedButton.icon(
-                        onPressed: (_isLoading || !_isOnline || _nameError != null) ? null : _saveCategory,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF9800),
-                          disabledBackgroundColor: Colors.grey.shade400,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "Informations de la catégorie",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
                         ),
-                        icon: _isLoading ? const SizedBox.shrink() : const Icon(Icons.check_circle_rounded),
-                        label: _isLoading
-                            ? const CircularProgressIndicator(color: Colors.white)
-                            : const Text("ENREGISTRER", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 20),
+
+                      // Sélection photo
+                      GestureDetector(
+                        onTap: _pickImage,
+                        child: Container(
+                          height: 140,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFAFAFA),
+                            borderRadius: BorderRadius.circular(15),
+                            border: Border.all(color: Colors.grey.shade300, style: BorderStyle.solid),
+                          ),
+                          child: _imageFile == null
+                              ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.add_a_photo_outlined, color: Colors.orange.shade700, size: 36),
+                              const SizedBox(height: 8),
+                              Text(
+                                "Ajouter une image",
+                                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                              ),
+                            ],
+                          )
+                              : ClipRRect(
+                            borderRadius: BorderRadius.circular(14),
+                            child: Image.file(_imageFile!, fit: BoxFit.cover),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      TextFormField(
+                        controller: _nameController,
+                        focusNode: _nameFocusNode,
+                        decoration: _inputStyle("Nom", Icons.category, isChecking: _isCheckingName, isValid: _isNameValid, error: _nameError),
+                        validator: (v) => (v == null || v.isEmpty) ? "Requis" : _nameError,
+                        onChanged: (val) {
+                          if (_nameError != null) setState(() => _nameError = null);
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
+                      TextFormField(
+                        controller: _descriptionController,
+                        maxLines: 3,
+                        decoration: _inputStyle("Description", Icons.notes),
+                      ),
+                      const SizedBox(height: 25),
+
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton.icon(
+                          onPressed: (_isLoading || !_isOnline || _nameError != null) ? null : _saveCategory,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFFF9800),
+                            disabledBackgroundColor: Colors.grey.shade300,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          icon: _isLoading ? const SizedBox.shrink() : const Icon(Icons.check_circle_rounded),
+                          label: _isLoading
+                              ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          )
+                              : const Text("ENREGISTRER", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:fada/screens/user_list_screen.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // 👈 AJOUTÉ pour accéder aux SharedPreferences
+import 'package:shared_preferences/shared_preferences.dart';
 import 'stock_alert_screen.dart';
 import '../services/depense_service.dart';
+import '../services/structure_service.dart';
+import '../models/structure_model.dart';
 import 'dashboard_screen.dart';
 import 'add_category_screen.dart';
 
@@ -22,41 +24,45 @@ class StructureAdminScreen extends StatefulWidget {
 
 class _StructureAdminScreenState extends State<StructureAdminScreen> {
   final DepenseService _depenseService = DepenseService();
+  final StructureService _structureService = StructureService();
 
-  // 👈 AJOUTÉ : Informations de l'utilisateur connecté
   String _currentUserId = "admin_inconnu";
   String _currentUserName = "Administrateur";
-  bool _isLoadingUser = true;
+  bool _isLoading = true;
+
+  StructureModel? _structureData;
 
   @override
   void initState() {
     super.initState();
-    _loadUserInfo(); // 👈 AJOUTÉ : Charger les informations au démarrage
+    _loadData();
   }
 
-  // 👈 AJOUTÉ : Charger l'ID et le Nom depuis SharedPreferences
-  Future<void> _loadUserInfo() async {
+  Future<void> _loadData() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (mounted) {
-        setState(() {
-          _currentUserId = prefs.getString('userId') ?? 'admin_inconnu';
-          _currentUserName = prefs.getString('userName') ?? 'Administrateur';
-          _isLoadingUser = false;
-        });
+      _currentUserId = prefs.getString('userId') ?? 'admin_inconnu';
+      _currentUserName = prefs.getString('userName') ?? 'Administrateur';
+
+      final rawData = await _structureService.getStructureById(widget.structureId);
+      if (rawData != null) {
+        _structureData = StructureModel.fromJson(rawData);
       }
     } catch (e) {
-      debugPrint("⚠️ Erreur lors du chargement des infos de l'admin : $e");
+      debugPrint("⚠️ Erreur lors du chargement des données : $e");
+    } finally {
       if (mounted) {
-        setState(() => _isLoadingUser = false);
+        setState(() => _isLoading = false);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool isSubValid = _structureData?.isSubscriptionValid ?? true;
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF9F7F2), // Fond très clair
+      backgroundColor: const Color(0xFFF9F7F2),
       appBar: AppBar(
         title: Text(
           widget.structureName,
@@ -70,7 +76,7 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
           child: Container(color: Colors.grey.withOpacity(0.2), height: 1.0),
         ),
       ),
-      body: _isLoadingUser
+      body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Colors.orange))
           : SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
@@ -79,15 +85,55 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
             _buildWelcomeCard(),
             const SizedBox(height: 30),
 
-            // Menu Items
-            _buildMenuTile(
-              context,
-              icon: Icons.bar_chart_rounded,
-              color: const Color(0xFF546E7A),
-              title: "Tableau de bord",
-              subtitle: "Analyse et rapports",
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => DashboardScreen(structureId: widget.structureId))),
-            ),
+            // 🔹 Conditionnement : Tableau de bord principal
+            if (isSubValid && _structureData?.dashboard == true)
+              _buildMenuTile(
+                context,
+                icon: Icons.bar_chart_rounded,
+                color: const Color(0xFF546E7A),
+                title: "Tableau de bord",
+                subtitle: "Analyse globale et rapports",
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => DashboardScreen(structureId: widget.structureId),
+                  ),
+                ),
+              ),
+
+            // 🔹 Conditionnement : Mini Dashboard (NOUVEAU)
+            if (isSubValid && _structureData?.miniDashboard == true)
+              _buildMenuTile(
+                context,
+                icon: Icons.space_dashboard_rounded,
+                color: const Color(0xFF00897B),
+                title: "Mini Dashboard",
+                subtitle: "Aperçu synthétique des indicateurs",
+                onTap: () {
+                  // TODO: Rediriger vers l'écran du Mini Dashboard
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Ouverture du Mini Dashboard...")),
+                  );
+                },
+              ),
+
+            // 🔹 Conditionnement : Assistant IA (NOUVEAU)
+            if (isSubValid && _structureData?.iaActive == true)
+              _buildMenuTile(
+                context,
+                icon: Icons.auto_awesome_rounded,
+                color: const Color(0xFF8E24AA),
+                title: "Assistant IA",
+                subtitle: "Conseils et prédictions intelligents",
+                onTap: () {
+                  // TODO: Rediriger vers l'écran de l'IA
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Ouverture de l'Assistant IA...")),
+                  );
+                },
+              ),
+
+            // Dépenses (Accessible à tous les plans actifs)
             _buildMenuTile(
               context,
               icon: Icons.payments_rounded,
@@ -96,31 +142,49 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
               subtitle: "Enregistrer une sortie",
               onTap: () => _showAddExpenseDialog(context),
             ),
+
+            // Catégories (Accessible si plan actif)
             _buildMenuTile(
               context,
               icon: Icons.category_rounded,
               color: const Color(0xFFFB8C00),
               title: "Catégories",
               subtitle: "Gestion des rubriques",
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AddCategoryScreen(structureId: widget.structureId))),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AddCategoryScreen(structureId: widget.structureId),
+                ),
+              ),
             ),
-            // Module Stock
-            _buildMenuTile(
-              context,
-              icon: Icons.inventory_2_rounded,
-              color: const Color(0xFF4CAF50),
-              title: "Stock & Inventaire",
-              subtitle: "Alertes et ajustements",
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StockAlertScreen())),
-            ),
-            _buildMenuTile(
-              context,
-              icon: Icons.people_alt_rounded,
-              color: const Color(0xFF3949AB),
-              title: "Utilisateurs",
-              subtitle: "Administration personnel",
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const UserListScreen())),
-            ),
+
+            // 🔹 Conditionnement : Stock & Inventaire (Alerte Stock)
+            if (isSubValid && _structureData?.stockAlerte == true)
+              _buildMenuTile(
+                context,
+                icon: Icons.inventory_2_rounded,
+                color: const Color(0xFF4CAF50),
+                title: "Stock & Inventaire",
+                subtitle: "Alertes et ajustements",
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const StockAlertScreen()),
+                ),
+              ),
+
+            // 🔹 Conditionnement : Administration des utilisateurs
+            if (isSubValid && (_structureData?.nombreUsers != null && _structureData!.nombreUsers > 1))
+              _buildMenuTile(
+                context,
+                icon: Icons.people_alt_rounded,
+                color: const Color(0xFF3949AB),
+                title: "Utilisateurs",
+                subtitle: "Administration personnel",
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const UserListScreen()),
+                ),
+              ),
           ],
         ),
       ),
@@ -146,6 +210,15 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
           const Text("Espace Administration", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 5),
           Text("Gérez les opérations de ${widget.structureName}", style: TextStyle(color: Colors.grey[600])),
+
+          if (_structureData?.planStructure != null) ...[
+            const SizedBox(height: 10),
+            Chip(
+              avatar: const Icon(Icons.star, size: 16, color: Colors.orange),
+              label: Text("Plan ${_structureData!.planStructure}"),
+              backgroundColor: Colors.orange.shade50,
+            ),
+          ]
         ],
       ),
     );
@@ -242,15 +315,14 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
               ),
               onPressed: () async {
                 if (amountController.text.isNotEmpty && titleController.text.isNotEmpty) {
-                  // 👈 CONFIGURATION DU PAYLOAD AVEC LES INFOS DE L'AGENT CONNECTÉ
                   final depenseData = {
                     "codeStructure": widget.structureId,
                     "amount": amountController.text.trim(),
                     "intitule": titleController.text.trim(),
                     "dateDepense": selectedDate.toIso8601String().split('T')[0],
-                    "userId": _currentUserId,       // ID unique
-                    "userName": _currentUserName,   // Nom d'affichage
-                    "createdBy": _currentUserId,     // 👈 Stocke bien l'ID de l'admin connecté
+                    "userId": _currentUserId,
+                    "userName": _currentUserName,
+                    "createdBy": _currentUserId,
                   };
 
                   bool success = await _depenseService.createDepense(depenseData);

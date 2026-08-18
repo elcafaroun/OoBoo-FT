@@ -1,5 +1,7 @@
 import 'dart:convert';
-import 'dart:io'; // Pour vérifier la connectivité via lookup
+
+
+import 'dart:io';
 
 import 'package:fada/services/customer_service.dart';
 import 'package:fada/services/database/database_helper.dart';
@@ -34,8 +36,6 @@ class _CartScreenState extends State<CartScreen> {
   String _currentUserId = "agent_inconnu";
   String _currentUserName = "Agent";
   bool _isLoading = true;
-  String? userProfile;
-  bool _isOfflineAdmin = false;
 
   @override
   void initState() {
@@ -45,30 +45,6 @@ class _CartScreenState extends State<CartScreen> {
 
   Future<void> _loadContextData() async {
     final prefs = await SharedPreferences.getInstance();
-    userProfile = prefs.getString('userProfile');
-    final String profileLower = userProfile?.toLowerCase() ?? '';
-    bool isAdminOrSuperAdmin = profileLower.contains("admin") || profileLower.contains("super_admin") || profileLower.contains("super admin");
-
-    if (isAdminOrSuperAdmin) {
-      debugPrint("👑 Profil Admin/Super Admin (Panier) : Vérification de la connexion requise.");
-
-      bool isOnline = false;
-      try {
-        isOnline = await NetworkChecker.isBackendAccessible();
-      } catch (e) {
-        debugPrint("❌ Erreur de vérification réseau (Panier) : $e");
-      }
-
-      if (!isOnline) {
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-            _isOfflineAdmin = true;
-          });
-        }
-        return;
-      }
-    }
 
     final structureId = widget.structureId ?? prefs.getString('selected_structure_id') ?? "1";
     final userId = widget.userId ?? prefs.getString('userId') ?? "agent_inconnu";
@@ -83,7 +59,6 @@ class _CartScreenState extends State<CartScreen> {
       _currentUserId = userId;
       _currentUserName = userName;
       _isLoading = false;
-      _isOfflineAdmin = false;
     });
   }
 
@@ -140,43 +115,6 @@ class _CartScreenState extends State<CartScreen> {
       return const Scaffold(
         backgroundColor: Color(0xFFF8F9FA),
         body: Center(child: CircularProgressIndicator(color: Colors.orange)),
-      );
-    }
-
-    // Si l'admin est hors-ligne, on retourne un écran épuré SANS AUCUN AppBar ni icône de navigation
-    if (_isOfflineAdmin) {
-      return Scaffold(
-        backgroundColor: const Color(0xFFF8F9FA),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(color: Colors.grey.shade100, shape: BoxShape.circle),
-                  child: Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey.shade400),
-                ),
-                const SizedBox(height: 24),
-                const Text("Connexion requise", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-                const SizedBox(height: 8),
-                const Text("En tant qu'administrateur, veuillez vérifier votre connexion internet pour accéder à cet espace.", textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 14, height: 1.4)),
-                const SizedBox(height: 24),
-                TextButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _isLoading = true;
-                    });
-                    _loadContextData();
-                  },
-                  icon: const Icon(Icons.refresh_rounded, color: Color(0xFFFF9800)),
-                  label: const Text("Réessayer", style: TextStyle(color: Color(0xFFFF9800), fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-          ),
-        ),
       );
     }
 
@@ -382,26 +320,14 @@ class _CustomerDialogState extends State<CustomerDialog> {
     }
   }
 
-  /// 🌐 Vérifie si une connexion internet réelle est disponible
-  Future<bool> _hasInternetConnection() async {
-    try {
-      final result = await InternetAddress.lookup('google.com');
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-    } on SocketException catch (_) {
-      return false;
-    }
-  }
-
   Future<void> _saveOrUpdateCustomer(String phone, String name) async {
     final CustomerService customerService = CustomerService();
     final db = await _dbHelper.database;
 
     final prefs = await SharedPreferences.getInstance();
-    // Récupération sécurisée du code structure en testant les deux clés courantes
     final String codeStructure = prefs.getString('selected_structure_id') ??
         prefs.getString('codeStructure') ?? '';
 
-    // 1. Chercher si le client existe déjà en local
     final existing = await db.query(
       'customers',
       where: 'numCust = ?',
@@ -419,7 +345,6 @@ class _CustomerDialogState extends State<CustomerDialog> {
       customerId = "CUST-${DateTime.now().millisecondsSinceEpoch}";
     }
 
-    // 2. Construire le payload complet du client
     final customerPayload = {
       'id': customerId,
       'numCust': phone,
@@ -432,7 +357,6 @@ class _CustomerDialogState extends State<CustomerDialog> {
       'version': currentVersion,
     };
 
-    // 3. Tentative d'appel au service en ligne avec repli (fallback) local
     try {
       if (existing.isNotEmpty) {
         await customerService.updateCustomer(customerPayload);
@@ -444,15 +368,11 @@ class _CustomerDialogState extends State<CustomerDialog> {
     } catch (e) {
       debugPrint("⚠️ Erreur lors de l'appel au CustomerService (Mode Hors-ligne) : $e");
 
-      // Sauvegarde immédiate en local
       await _dbHelper.saveCustomerLocal(customerPayload);
-
-      // Enregistrement dans la file d'attente avec la bonne action ('INSERT' ou 'UPDATE')
       await _addToSyncQueue(db, customerId, customerPayload, existing.isNotEmpty);
     }
   }
 
-  /// 📝 Fonction de secours pour la file d'attente de synchronisation
   Future<void> _addToSyncQueue(Database db, String customerId, Map<String, dynamic> payload, bool isUpdate) async {
     final String actionType = isUpdate ? 'UPDATE' : 'INSERT';
 
@@ -476,7 +396,7 @@ class _CustomerDialogState extends State<CustomerDialog> {
     } else {
       await db.insert('sync_queue', {
         'tableName': 'customers',
-        'action': actionType, // Correspond exactement à ce que SyncService écoute ('INSERT' ou 'UPDATE')
+        'action': actionType,
         'entityId': customerId,
         'data': jsonEncode(payload),
         'status': 'PENDING',
@@ -552,7 +472,6 @@ class _CustomerDialogState extends State<CustomerDialog> {
                   final name = _nameController.text.trim();
 
                   if (phone.isNotEmpty && name.isNotEmpty) {
-                    // Sauvegarde locale + tentative en ligne / file d'attente
                     await _saveOrUpdateCustomer(phone, name);
 
                     if (mounted) {
