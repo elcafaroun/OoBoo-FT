@@ -12,7 +12,9 @@ class StructureModel {
   final bool emailAlerte;
   final bool dashboard;
   final bool miniDashboard; // 👈 NOUVEAU
-  final bool iaActive;      // 👈 NOUVEAU
+  final bool iaActive;
+  final bool dashboardWeb; // 👈 NOUVEAU
+  final bool userManagement;  // 👈 NOUVEAU
   final bool loyaltyAccess;
   final int nombreUsers;
   final int nombreCategorieParBusiness;
@@ -35,6 +37,8 @@ class StructureModel {
     required this.nombreUsers,
     required this.nombreCategorieParBusiness,
     required this.nombreProdParBusiness,
+    required this.dashboardWeb,
+    required this.userManagement
   });
 
   factory StructureModel.fromJson(Map<String, dynamic> json) {
@@ -54,6 +58,8 @@ class StructureModel {
       miniDashboard: json['miniDashboard'] == true, // 👈 NOUVEAU
       iaActive: json['iaActive'] == true,           // 👈 NOUVEAU
       loyaltyAccess: json['loyaltyAccess'] == true,
+      dashboardWeb: json['dashboardWeb']==true,
+      userManagement: json['userManagement']==true,
 
       nombreUsers: int.tryParse(json['nombreUsers']?.toString() ?? '1') ?? 1,
       nombreCategorieParBusiness: int.tryParse(json['nombreCategorieParBusiness']?.toString() ?? '0') ?? 0,

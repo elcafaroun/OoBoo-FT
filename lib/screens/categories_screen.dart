@@ -208,7 +208,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        // ✅ FLÈCHE DE RETOUR TOUJOURS ACCESSIBLE
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.black87, size: 22),
           onPressed: () => Navigator.of(context).pop(),
@@ -284,7 +283,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    // ✅ BOUTON RETOUR DIRECT
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -295,7 +293,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                       label: const Text("Retour", style: TextStyle(color: Colors.black87, fontWeight: FontWeight.bold)),
                     ),
                     const SizedBox(width: 12),
-                    // ✅ BOUTON RÉESSAYER
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFFF9800),
@@ -331,7 +328,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
     );
   }
 
-  /// Bandeau indiquant le fonctionnement hors-ligne
   Widget _buildOfflineBanner() {
     return Container(
       width: double.infinity,
@@ -549,6 +545,15 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
 
   void _showFullDetails(dynamic p, String imageUrl) {
     int quantity = 1;
+    final String rawDescription = p['productDescription'] ?? '';
+
+    // Extrait et nettoie les sous-éléments séparés par des virgules
+    final List<String> detailsList = rawDescription
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -557,7 +562,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
         child: StatefulBuilder(
           builder: (context, setModalState) {
             return Container(
-              height: MediaQuery.of(context).size.height * 0.85,
+              height: MediaQuery.of(context).size.height * 0.88,
               decoration: const BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
@@ -567,57 +572,118 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                   ProductImageWidget(
                     localPath: p['photoPath'],
                     networkUrl: imageUrl,
-                    height: 300,
+                    height: 260,
                     width: double.infinity,
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(25),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(child: Text(p['productName'] ?? '', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold))),
-                            Text("${p['productPrice']} FCFA", style: const TextStyle(fontSize: 20, color: Colors.orange, fontWeight: FontWeight.w900)),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.remove_circle_outline),
-                              onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null,
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 20),
-                              child: Text("$quantity", style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.add_circle_outline, color: Colors.orange),
-                              onPressed: () => setModalState(() => quantity++),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 20),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                            minimumSize: const Size(double.infinity, 55),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(25),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  p['productName'] ?? '',
+                                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              Text(
+                                "${p['productPrice']} FCFA",
+                                style: const TextStyle(fontSize: 18, color: Colors.orange, fontWeight: FontWeight.w900),
+                              ),
+                            ],
                           ),
-                          onPressed: () {
-                            Provider.of<CartProvider>(context, listen: false).addItem(
-                              p['id'].toString(),
-                              p['productName'],
-                              (p['productPrice'] as num).toDouble(),
-                              imageUrl,
-                              quantity,
-                            );
-                            Navigator.pop(context);
-                          },
-                          child: const Text("AJOUTER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        ),
-                      ],
+                          const SizedBox(height: 20),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.remove_circle_outline, size: 28),
+                                onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null,
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 20),
+                                child: Text("$quantity", style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.add_circle_outline, color: Colors.orange, size: 28),
+                                onPressed: () => setModalState(() => quantity++),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              minimumSize: const Size(double.infinity, 55),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                              elevation: 0,
+                            ),
+                            onPressed: () {
+                              Provider.of<CartProvider>(context, listen: false).addItem(
+                                p['id'].toString(),
+                                p['productName'],
+                                (p['productPrice'] as num).toDouble(),
+                                imageUrl,
+                                quantity,
+                              );
+                              Navigator.pop(context);
+                            },
+                            child: const Text("AJOUTER AU PANIER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                          ),
+
+                          // 🔹 LISTE DE CARACTÉRISTIQUES AVEC COCHES (CHECKMARKS)
+                          if (detailsList.isNotEmpty) ...[
+                            const SizedBox(height: 25),
+                            const Divider(height: 1, color: Color(0xFFF1F5F9)),
+                            const SizedBox(height: 20),
+                            const Text(
+                              "Caractéristiques",
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                            ),
+                            const SizedBox(height: 12),
+                            Column(
+                              children: detailsList.map((detail) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 10.0),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(2),
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFFDCFCE7), // Vert pastel clair
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          Icons.check_rounded,
+                                          size: 16,
+                                          color: Color(0xFF16A34A), // Vert validation
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          detail,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
+                                            color: Color(0xFF334155),
+                                            height: 1.3,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
                   ),
                 ],

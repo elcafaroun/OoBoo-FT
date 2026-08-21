@@ -6,6 +6,7 @@ import '../services/depense_service.dart';
 import '../services/structure_service.dart';
 import '../models/structure_model.dart';
 import 'dashboard_screen.dart';
+import 'mini_dashboard_screen.dart';
 import 'add_category_screen.dart';
 
 class StructureAdminScreen extends StatefulWidget {
@@ -59,6 +60,7 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Vérification de la validité de l'abonnement
     final bool isSubValid = _structureData?.isSubscriptionValid ?? true;
 
     return Scaffold(
@@ -85,7 +87,7 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
             _buildWelcomeCard(),
             const SizedBox(height: 30),
 
-            // 🔹 Conditionnement : Tableau de bord principal
+            // 🔹 Tableau de bord principal
             if (isSubValid && _structureData?.dashboard == true)
               _buildMenuTile(
                 context,
@@ -101,7 +103,7 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
                 ),
               ),
 
-            // 🔹 Conditionnement : Mini Dashboard (NOUVEAU)
+            // 🔹 Mini Dashboard (Redirection vers MiniDashboardScreen)
             if (isSubValid && _structureData?.miniDashboard == true)
               _buildMenuTile(
                 context,
@@ -109,15 +111,15 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
                 color: const Color(0xFF00897B),
                 title: "Mini Dashboard",
                 subtitle: "Aperçu synthétique des indicateurs",
-                onTap: () {
-                  // TODO: Rediriger vers l'écran du Mini Dashboard
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Ouverture du Mini Dashboard...")),
-                  );
-                },
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => MiniDashboardScreen(structureId: widget.structureId),
+                  ),
+                ),
               ),
 
-            // 🔹 Conditionnement : Assistant IA (NOUVEAU)
+            // 🔹 Assistant IA
             if (isSubValid && _structureData?.iaActive == true)
               _buildMenuTile(
                 context,
@@ -126,39 +128,40 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
                 title: "Assistant IA",
                 subtitle: "Conseils et prédictions intelligents",
                 onTap: () {
-                  // TODO: Rediriger vers l'écran de l'IA
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text("Ouverture de l'Assistant IA...")),
                   );
                 },
               ),
 
-            // Dépenses (Accessible à tous les plans actifs)
-            _buildMenuTile(
-              context,
-              icon: Icons.payments_rounded,
-              color: const Color(0xFFE53935),
-              title: "Dépenses",
-              subtitle: "Enregistrer une sortie",
-              onTap: () => _showAddExpenseDialog(context),
-            ),
-
-            // Catégories (Accessible si plan actif)
-            _buildMenuTile(
-              context,
-              icon: Icons.category_rounded,
-              color: const Color(0xFFFB8C00),
-              title: "Catégories",
-              subtitle: "Gestion des rubriques",
-              onTap: () => Navigator.push(
+            // 🔹 Dépenses (Vérifie uniquement isSubValid)
+            if (isSubValid)
+              _buildMenuTile(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => AddCategoryScreen(structureId: widget.structureId),
+                icon: Icons.payments_rounded,
+                color: const Color(0xFFE53935),
+                title: "Dépenses",
+                subtitle: "Enregistrer une sortie",
+                onTap: () => _showAddExpenseDialog(context),
+              ),
+
+            // 🔹 Catégories (Vérifie uniquement isSubValid)
+            if (isSubValid)
+              _buildMenuTile(
+                context,
+                icon: Icons.category_rounded,
+                color: const Color(0xFFFB8C00),
+                title: "Catégories",
+                subtitle: "Gestion des rubriques",
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AddCategoryScreen(structureId: widget.structureId),
+                  ),
                 ),
               ),
-            ),
 
-            // 🔹 Conditionnement : Stock & Inventaire (Alerte Stock)
+            // 🔹 Stock & Inventaire
             if (isSubValid && _structureData?.stockAlerte == true)
               _buildMenuTile(
                 context,
@@ -172,18 +175,33 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
                 ),
               ),
 
-            // 🔹 Conditionnement : Administration des utilisateurs
-            if (isSubValid && (_structureData?.nombreUsers != null && _structureData!.nombreUsers > 1))
+            // 🔹 Administration des utilisateurs (Vérifie uniquement isSubValid et userManagement)
+            if (isSubValid && _structureData?.userManagement == true)
               _buildMenuTile(
                 context,
                 icon: Icons.people_alt_rounded,
                 color: const Color(0xFF3949AB),
                 title: "Utilisateurs",
-                subtitle: "Administration personnel",
+                subtitle: "Administration du personnel",
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const UserListScreen()),
                 ),
+              ),
+
+            // 🔹 Programme de Fidélité
+            if (isSubValid && _structureData?.loyaltyAccess == true)
+              _buildMenuTile(
+                context,
+                icon: Icons.card_giftcard_rounded,
+                color: const Color(0xFFD81B60),
+                title: "Fidélité & Récompenses",
+                subtitle: "Gestion des programmes clients",
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Module Fidélité bientôt disponible")),
+                  );
+                },
               ),
           ],
         ),
@@ -225,13 +243,14 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
   }
 
   // Menu Tile Style
-  Widget _buildMenuTile(BuildContext context, {
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String subtitle,
-    required VoidCallback onTap
-  }) {
+  Widget _buildMenuTile(
+      BuildContext context, {
+        required IconData icon,
+        required Color color,
+        required String title,
+        required String subtitle,
+        required VoidCallback onTap,
+      }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 15),
       decoration: BoxDecoration(
@@ -244,8 +263,8 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
         leading: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12)
+            color: color.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Icon(icon, color: color, size: 28),
         ),
@@ -274,9 +293,9 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
               TextField(
                 controller: titleController,
                 decoration: InputDecoration(
-                    labelText: "Intitulé",
-                    prefixIcon: const Icon(Icons.description),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))
+                  labelText: "Intitulé",
+                  prefixIcon: const Icon(Icons.description),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
               const SizedBox(height: 15),
@@ -284,9 +303,9 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
                 controller: amountController,
                 keyboardType: TextInputType.number,
                 decoration: InputDecoration(
-                    labelText: "Montant (FCFA)",
-                    prefixIcon: const Icon(Icons.payments),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12))
+                  labelText: "Montant (FCFA)",
+                  prefixIcon: const Icon(Icons.payments),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
               const SizedBox(height: 15),
@@ -309,9 +328,9 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
             TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF9800),
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
+                backgroundColor: const Color(0xFFFF9800),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
               onPressed: () async {
                 if (amountController.text.isNotEmpty && titleController.text.isNotEmpty) {
@@ -329,7 +348,7 @@ class _StructureAdminScreenState extends State<StructureAdminScreen> {
                   if (success && context.mounted) {
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Dépense enregistrée !"), backgroundColor: Colors.green)
+                      const SnackBar(content: Text("Dépense enregistrée !"), backgroundColor: Colors.green),
                     );
                   }
                 }

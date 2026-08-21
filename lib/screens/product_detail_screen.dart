@@ -163,7 +163,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               },
               icon: const Icon(Icons.add_shopping_cart, color: Colors.white),
               label: const Text(
-                  "AJOUTER AU PANIER",
+                  "AJOUTER AU PANIER!",
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)
               ),
               style: ElevatedButton.styleFrom(

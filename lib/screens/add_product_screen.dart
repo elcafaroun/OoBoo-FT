@@ -78,7 +78,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     setState(() => _isOnline = !result.contains(ConnectivityResult.none));
   }
 
-  /// 🔹 Navigation vers MonEspaceScreen
   void _navigateToMonEspace() {
     Navigator.push(
       context,
@@ -88,7 +87,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     );
   }
 
-  /// 🔍 Génération automatique d'un code unique basé sur le temps et la structure
   void _generateAutomaticQrCode() async {
     final prefs = await SharedPreferences.getInstance();
     final String codeStructure = prefs.getString('selected_structure_id') ?? "PBM";
@@ -99,7 +97,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     });
   }
 
-  /// 📸 Ouvre l'écran de la caméra et vérifie le code scanné
   Future<void> _scanProductCode() async {
     final String? codeScanne = await Navigator.push<String>(
       context,
@@ -111,7 +108,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
-  /// 🔍 Vérifie la présence du QR Code et affiche la pop-up de mise à jour du stock si nécessaire
   Future<void> _checkQrCodeAndHandleStockUpdate(String codeScanne) async {
     final prefs = await SharedPreferences.getInstance();
     final String codeStructure = prefs.getString('selected_structure_id') ?? "DEFAUT";
@@ -148,7 +144,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
-  /// 💬 Dialogue pour saisir la quantité et mettre à jour le stock
   void _showUpdateStockDialog(Map<String, dynamic> product, String qrCode) {
     final TextEditingController stockInputController = TextEditingController();
     final String productName = product["productName"] ?? "Ce produit";
@@ -222,16 +217,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
                 Navigator.of(ctx).pop();
 
-                // 🔹 FIX 1: Récupération de la structure réelle de l'objet ou des SharedPreferences
                 final prefs = await SharedPreferences.getInstance();
                 final String codeStructure = product["codeStructure"] ??
                     prefs.getString('selected_structure_id') ??
                     "DEFAUT";
 
-                // 🔹 FIX 2: Récupération du QR code exact du produit renvoyé par le backend
                 final String productQrCode = product["productQrCode"] ?? qrCode;
 
-                // Appel de la méthode avec les identifiants requis par le backend
                 await _updateStock(
                   productQrCode: productQrCode,
                   codeStructure: codeStructure,
@@ -246,7 +238,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     );
   }
 
-  /// 🔄 Exécute la mise à jour du stock via le service
   Future<void> _updateStock({
     required String productQrCode,
     required String codeStructure,
@@ -254,7 +245,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }) async {
     setState(() => _loading = true);
     try {
-      // 🔹 FIX 3: Appel direct à la méthode d'entrée de stock par QR Code et Structure
       await _service.addStockByQrCode(
         productQrCode: productQrCode,
         codeStructure: codeStructure,
@@ -370,7 +360,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ],
           ),
           content: Text(
-            "$errorMessage\n\nMerci de modifier votre plan dans votre espace ou de contacter l'équipe technique au 61616134.",
+            "$errorMessage\n\nMerci de modifier votre plan dans votre espace ou de contacter l'équipe technique.",
             style: const TextStyle(fontSize: 14),
           ),
           actions: [
@@ -446,10 +436,21 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
-  InputDecoration _fieldStyle(String label, IconData icon, {bool checking = false, String? error, bool valid = false, Widget? suffix}) {
+  InputDecoration _fieldStyle(
+      String label,
+      IconData icon, {
+        bool checking = false,
+        String? error,
+        bool valid = false,
+        Widget? suffix,
+        String? helperText,
+      }) {
     return InputDecoration(
       labelText: label,
       errorText: error,
+      helperText: helperText,
+      helperMaxLines: 2,
+      helperStyle: TextStyle(color: Colors.blueGrey.shade600, fontSize: 12),
       prefixIcon: Icon(icon, color: Colors.orange.shade700),
       suffixIcon: suffix ?? (checking
           ? const Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator(strokeWidth: 2))
@@ -549,7 +550,15 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   ),
                   const SizedBox(height: 15),
 
-                  TextFormField(controller: _descriptionController, maxLines: 2, decoration: _fieldStyle("Description", Icons.description)),
+                  TextFormField(
+                    controller: _descriptionController,
+                    maxLines: 2,
+                    decoration: _fieldStyle(
+                      "Description",
+                      Icons.description,
+                      helperText: "💡 Séparez chaque élément/caractéristique par une virgule (ex: Rouge, 128Go, Neuf)",
+                    ),
+                  ),
                   const SizedBox(height: 15),
 
                   Row(

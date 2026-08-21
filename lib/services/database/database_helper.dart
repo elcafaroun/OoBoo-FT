@@ -113,7 +113,7 @@ class DatabaseHelper {
     await db.execute(
         '''CREATE TABLE categories (id TEXT PRIMARY KEY, nameCat TEXT, codeStructure TEXT, isActive INTEGER, lastUpdated TEXT, photoPath TEXT, version INTEGER, deleted INTEGER DEFAULT 0)''');
     await db.execute(
-        '''CREATE TABLE products (id TEXT PRIMARY KEY, productName TEXT, productPrice REAL, prixAchat REAL, productQte REAL, stockAlert REAL,productQrCode TEXT, codeStructure TEXT, categoryId TEXT, isActive INTEGER, lastUpdated TEXT, photoPath TEXT, version INTEGER, deleted INTEGER DEFAULT 0)''');
+        '''CREATE TABLE products (id TEXT PRIMARY KEY, productName TEXT, productPrice REAL, prixAchat REAL, productDescription TEXT, productQte REAL, stockAlert REAL,productQrCode TEXT, codeStructure TEXT, categoryId TEXT, isActive INTEGER, lastUpdated TEXT, photoPath TEXT, version INTEGER, deleted INTEGER DEFAULT 0)''');
     await db.execute(
         '''CREATE TABLE commands (id TEXT PRIMARY KEY, customerName TEXT, status TEXT, totalAmount REAL, totalCredit REAL, codeStructure TEXT, paymentMethod TEXT, orderDate TEXT, lastUpdated TEXT, version INTEGER, deleted INTEGER DEFAULT 0, isSynced INTEGER DEFAULT 0)''');
     await db.execute('''
@@ -368,6 +368,7 @@ class DatabaseHelper {
         'productName': p['productName'],
         'productPrice': (p['productPrice'] as num?)?.toDouble() ?? 0.0,
         'prixAchat': (p['prixAchat'] as num?)?.toDouble() ?? 0.0,
+        'productDescription': p['productDescription'] ?? '',
         'productQte': (p['productQte'] as num?)?.toDouble() ?? 0.0,
         'stockAlert': (p['stockAlert'] as num?)?.toDouble() ?? 0.0,
         'productQrCode':

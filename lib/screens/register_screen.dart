@@ -44,14 +44,26 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _checkInitialConnectivity();
   }
 
-  /// 🔒 Appel de ton service NetworkChecker avant d'afficher le formulaire
+  @override
+  void dispose() {
+    nameController.dispose();
+    phoneController.dispose();
+    emailController.dispose();
+    passwordController.dispose();
+    confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  /// 🔒 Appel du NetworkChecker avant d'afficher le formulaire
   Future<void> _checkInitialConnectivity() async {
+    if (!mounted) return;
     setState(() {
       _isCheckingConnectivity = true;
     });
 
     final bool backendAccessible = await NetworkChecker.isBackendAccessible();
 
+    if (!mounted) return;
     setState(() {
       _isOnline = backendAccessible;
       _isCheckingConnectivity = false;
@@ -64,7 +76,104 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return pin.toString();
   }
 
-  /// 📝 Envoi du Code PIN d'accès (WhatsApp ou SMS) pour les collaborateurs de l'application PB-M
+  /// 🚨 Modale d'avertissement en cas de limite de quota atteinte
+  void _showQuotaLimitDialog(String message) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20.0),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  "Limite atteinte",
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1E293B),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                message,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF64748B),
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                "Souhaitez-vous passer à une formule supérieure pour ajouter d'autres collaborateurs ?",
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1E293B),
+                ),
+              ),
+            ],
+          ),
+          actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          actions: [
+            // 🔘 FERMER : Redirection vers l'écran précédent
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                if (mounted) {
+                  Navigator.pop(context);
+                }
+              },
+              child: const Text(
+                "Fermer",
+                style: TextStyle(
+                  color: Color(0xFF64748B),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+
+            // 🚀 CHANGER DE PLAN : Redirection vers les Abonnements
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                if (mounted) {
+                  Navigator.pushNamed(context, '/subscription');
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              child: const Text(
+                "Changer de plan",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 📝 Envoi du Code PIN d'accès (WhatsApp ou SMS)
   Future<void> _sendAccessCode(String method, String phone, String userName, String pin) async {
     final cleanPhone = phone.replaceAll(' ', '');
     final message = "Bonjour $userName, voici vos accès à l'application POKIBOO.\n\n"
@@ -88,7 +197,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     try {
       if (await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        // Succès du lancement
+        // Succès
       } else {
         throw 'Impossible d\'ouvrir l\'application de messagerie.';
       }
@@ -102,7 +211,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
-  /// 💬 Modale de sélection pour le canal d'envoi (WhatsApp / SMS)
+  /// 💬 Modale de sélection du canal d'envoi (WhatsApp / SMS)
   void _showShareOptions(String phone, String userName, String pin) {
     showModalBottomSheet(
       context: context,
@@ -178,7 +287,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
 
       if (!widget.isFromLogin && (codeStructure == null || codeStructure.isEmpty)) {
-        setState(() => isLoading = false);
+        if (mounted) setState(() => isLoading = false);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text("Erreur : Impossible de lier l'utilisateur à une structure active ❌"),
@@ -195,7 +304,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (targetEmail.isNotEmpty) {
         bool emailAvailable = await userService.checkEmailAvailable(targetEmail);
         if (!emailAvailable) {
-          setState(() => isLoading = false);
+          if (mounted) setState(() => isLoading = false);
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                 content: Text("Cette adresse e-mail est déjà prise ❌"),
@@ -207,7 +316,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       bool phoneAvailable = await userService.checkPhoneAvailable(targetPhone);
       if (!phoneAvailable) {
-        setState(() => isLoading = false);
+        if (mounted) setState(() => isLoading = false);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text("Ce numéro de téléphone est déjà utilisé ❌"),
@@ -216,12 +325,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         return;
       }
 
-      String finalPassword;
-      if (widget.isFromLogin) {
-        finalPassword = passwordController.text.trim();
-      } else {
-        finalPassword = _generateRandomPin();
-      }
+      String finalPassword = widget.isFromLogin ? passwordController.text.trim() : _generateRandomPin();
 
       debugPrint("🔑 [TEST LOG] Mot de passe / PIN généré pour $targetName : '$finalPassword'");
 
@@ -234,7 +338,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         widget.isFromLogin ? null : codeStructure,
       );
 
-      setState(() => isLoading = false);
+      if (mounted) setState(() => isLoading = false);
 
       if (success) {
         if (mounted) {
@@ -248,21 +352,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
             _showShareOptions(targetPhone, targetName, finalPassword);
           }
         }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text("Erreur lors de l'enregistrement de l'utilisateur par le serveur ❌"),
-              backgroundColor: Colors.red
-          ));
-        }
       }
     } catch (e) {
-      setState(() => isLoading = false);
+      if (mounted) setState(() => isLoading = false);
+
+      // Nettoyage de la chaîne de l'exception
+      final String rawError = e.toString()
+          .replaceAll("Exception: ", "")
+          .replaceAll("Exception", "")
+          .trim();
+
+      debugPrint("🚨 [REGISTER ERROR CATCH] : $rawError");
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text("Une erreur technique est survenue : $e"),
-            backgroundColor: Colors.red
-        ));
+        final String lowerError = rawError.toLowerCase();
+
+        // Interception large du message de limite de quota, d'abonnement ou d'erreur de structure
+        if (lowerError.contains("limite") ||
+            lowerError.contains("quota") ||
+            lowerError.contains("abonnement") ||
+            lowerError.contains("maximum")) {
+          _showQuotaLimitDialog(rawError);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(rawError.isNotEmpty ? rawError : "Une erreur est survenue lors de l'enregistrement ❌"),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ));
+        }
       }
     }
   }
@@ -442,12 +559,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: Colors.orange.withOpacity(0.2)),
                         ),
-                        child: Row(
+                        child: const Row(
                           children: [
-                            const Icon(Icons.info_outline_rounded, color: Colors.orange, size: 18),
-                            const SizedBox(width: 10),
+                            Icon(Icons.info_outline_rounded, color: Colors.orange, size: 18),
+                            SizedBox(width: 10),
                             Expanded(
-                              child: const Text(
+                              child: Text(
                                 "Le code PIN sera généré automatiquement et pourra être envoyé par WhatsApp ou SMS.",
                                 style: TextStyle(color: Color(0xFF475569), fontSize: 11, fontWeight: FontWeight.w500, height: 1.3),
                               ),
@@ -502,7 +619,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
                     const SizedBox(height: 24),
 
-                    // 🔘 Bouton Soumission (Hauteur 46)
+                    // 🔘 Bouton Soumission
                     SizedBox(
                       width: double.infinity,
                       height: 46,
