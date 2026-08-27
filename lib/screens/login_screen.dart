@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:fada/services/database/database_helper.dart';
+import 'package:fada/utils/app_exception.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -73,6 +74,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // ✅ LE CŒUR DU OFFLINE-FIRST SÉCURISÉ
+
   void _login() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
@@ -81,7 +83,6 @@ class _LoginScreenState extends State<LoginScreen> {
     final String passwordValue = _passwordController.text.trim();
 
     try {
-      // 1️⃣ ÉTAPE 1 : On vérifie si cet identifiant existe déjà en local dans SQLite
       final db = await DatabaseHelper().database;
       final List<Map<String, dynamic>> localUserExists = await db.query(
         'users',
@@ -91,98 +92,77 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (localUserExists.isNotEmpty) {
-        // 🔐 L'utilisateur existe en local -> FLUX OFFLINE-FIRST STRICT
         final localUser = await DatabaseHelper().checkLoginOffline(loginValue, passwordValue);
 
         if (localUser != null) {
-          // 🎉 PIN Correct -> Connexion instantanée
           final SharedPreferences prefs = await SharedPreferences.getInstance();
           final String cachedCodeStructure = localUser['codeStructure']?.toString() ?? '';
           final String userId = localUser['id'].toString();
 
-          // 🔄 On transmet le user tel quel pour récupérer son 'userProfile' stocké localement
           await _saveSession(prefs, Map<String, dynamic>.from(localUser), cachedCodeStructure);
 
           if (mounted) {
-            _showSnackBar('Connexion réussie 🛰️', Colors.blueGrey);
+            _showSnackBar('Connexion réussie ', Colors.blueGrey);
             setState(() => _isLoading = false);
           }
 
           await _checkAndNavigate(userId, cachedCodeStructure, false);
-
-          // Sync discrète du profil en arrière-plan
           _triggerBackgroundSync(loginValue, passwordValue);
           return;
         } else {
-          // ❌ L'utilisateur existe mais le PIN est FAUX -> On bloque DIRECTEMENT ici !
-          debugPrint("❌ [SÉCURITÉ] Rejet immédiat : Code PIN local invalide.");
-          _showErrorLogin();
-          return;
+          throw Exception("INVALID_CREDENTIALS|Identifiant ou code PIN local incorrect.");
         }
       }
-
-      // 2️⃣ ÉTAPE 2 : TOUTE PREMIÈRE CONNEXION (L'utilisateur n'existe pas encore en local)
-      debugPrint("🔍 Utilisateur inconnu en local. Tentative de premier enregistrement via le serveur...");
 
       if (await NetworkChecker.isBackendAccessible()) {
         final userData = await _userService.login(loginValue, passwordValue);
 
-        if (userData != null) {
-          // Double sécurité : On s'assure que le serveur valide le PIN envoyé
-          final String serverCodeUser = (userData['codeUser'] ?? '').toString();
-          if (serverCodeUser.isNotEmpty && serverCodeUser != passwordValue && userData['isFirstLogin'] != true) {
-            _showErrorLogin();
-            return;
+        final String serverCodeUser = (userData['codeUser'] ?? '').toString();
+        if (serverCodeUser.isNotEmpty && serverCodeUser != passwordValue && userData['isFirstLogin'] != true) {
+          throw Exception("INVALID_CREDENTIALS|Identifiant ou code PIN invalide.");
+        }
+
+        final SharedPreferences prefs = await SharedPreferences.getInstance();
+        final String userId = userData['id'].toString();
+
+        List<dynamic> structuresAssociees = userData['structures'] ?? [];
+        String codeStructure = structuresAssociees.isNotEmpty
+            ? structuresAssociees.first['codeStructure']?.toString() ?? ''
+            : '';
+
+        String profileValue = userData['userProfile']?.toString() ?? 'SUPER_ADMIN';
+
+        Map<String, dynamic> localUserMap = {
+          'id': userId,
+          'userName': userData['userName'] ?? loginValue,
+          'userEmail': userData['userEmail'],
+          'userPhone': userData['userPhone'],
+          'userProfile': profileValue,
+          'codeStructure': codeStructure,
+          'codeUser': serverCodeUser.isNotEmpty ? serverCodeUser : passwordValue,
+          'isActive': 1,
+          'updatedAt': DateTime.now().toIso8601String(),
+        };
+
+        await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
+        final bool isFirstLogin = userData['isFirstLogin'] == true;
+        await _saveSession(prefs, userData, codeStructure);
+
+        if (mounted) {
+          setState(() => _isLoading = false);
+          if (isFirstLogin) {
+            _showChangePasswordDialog(userId, codeStructure, localUserMap);
+          } else {
+            _checkAndNavigate(userId, codeStructure, true);
           }
-
-          final SharedPreferences prefs = await SharedPreferences.getInstance();
-          final String userId = userData['id'].toString();
-
-          List<dynamic> structuresAssociees = userData['structures'] ?? [];
-          String codeStructure = '';
-          if (structuresAssociees.isNotEmpty) {
-            codeStructure = structuresAssociees.first['codeStructure']?.toString() ?? '';
-          }
-
-          // 👑 On conserve 'userProfile' en local s'il vient du serveur, ou 'SUPER_ADMIN' par sécurité
-          String profileValue = userData['userProfile']?.toString() ?? 'SUPER_ADMIN';
-
-          Map<String, dynamic> localUserMap = {
-            'id': userId,
-            'userName': userData['userName'] ?? loginValue,
-            'userEmail': userData['userEmail'],
-            'userPhone': userData['userPhone'],
-            'userProfile': profileValue,
-            'codeStructure': codeStructure,
-            'codeUser': serverCodeUser.isNotEmpty ? serverCodeUser : passwordValue,
-            'isActive': 1,
-            'updatedAt': DateTime.now().toIso8601String(),
-          };
-
-          // On initialise la session locale SQLite
-          await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
-          final bool isFirstLogin = userData['isFirstLogin'] == true;
-          await _saveSession(prefs, userData, codeStructure);
-
-          if (mounted) {
-            setState(() => _isLoading = false);
-            if (isFirstLogin) {
-              _showChangePasswordDialog(userId, codeStructure, localUserMap);
-            } else {
-              _checkAndNavigate(userId, codeStructure, true);
-            }
-          }
-        } else {
-          _showErrorLogin();
         }
       } else {
-        // Pas de réseau ET aucun compte local existant = impossible de se connecter
-        _showSnackBar('Première connexion requise en ligne 🌐', Colors.orangeAccent);
-        setState(() => _isLoading = false);
+        throw Exception("OFFLINE_LOGIN_FAILED|Première connexion requise en ligne.");
       }
     } catch (e) {
       setState(() => _isLoading = false);
-      _showSnackBar('Erreur : $e', Colors.red);
+      final appErr = AppException.fromRaw(e);
+      _showSnackBar('[${appErr.code}] ${appErr.message}', Colors.red);
     }
   }
 

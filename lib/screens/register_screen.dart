@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'package:fada/utils/app_exception.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -76,8 +77,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return pin.toString();
   }
 
-  /// 🚨 Modale d'avertissement en cas de limite de quota atteinte
-  void _showQuotaLimitDialog(String message) {
+  /// 🚨 Modale d'avertissement explicite en cas de limite de quota atteinte
+  void _showQuotaLimitDialog(AppException exception) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -92,9 +93,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
               SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  "Limite atteinte",
+                  "Limite d'utilisateurs atteinte",
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 17,
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF1E293B),
                   ),
@@ -107,27 +108,43 @@ class _RegisterScreenState extends State<RegisterScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                message,
+                exception.message,
                 style: const TextStyle(
                   fontSize: 13,
-                  color: Color(0xFF64748B),
+                  color: Color(0xFF475569),
                   height: 1.4,
                 ),
               ),
-              const SizedBox(height: 12),
-              const Text(
-                "Souhaitez-vous passer à une formule supérieure pour ajouter d'autres collaborateurs ?",
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF1E293B),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.orange.withOpacity(0.2)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.workspace_premium_rounded, color: Colors.orange, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "Passez à une formule supérieure pour débloquer la création de nouveaux comptes collaborateurs.",
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1E293B),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
           actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           actions: [
-            // 🔘 FERMER : Redirection vers l'écran précédent
+            // 🔘 FERMER
             TextButton(
               onPressed: () {
                 Navigator.pop(dialogContext);
@@ -262,17 +279,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  /// ⚡ Soumission du formulaire d'enregistrement
   Future<void> handleRegister() async {
     if (!_formKey.currentState!.validate()) return;
 
     if (!await NetworkChecker.isBackendAccessible()) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Le serveur est devenu injoignable ou votre connexion a coupé 🌐"),
-          backgroundColor: Colors.red,
-        ));
-      }
+      _showSnackBar("OFFLINE_ERROR|Connexion requise pour cette action.", Colors.red);
       return;
     }
 
@@ -287,14 +298,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
 
       if (!widget.isFromLogin && (codeStructure == null || codeStructure.isEmpty)) {
-        if (mounted) setState(() => isLoading = false);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text("Erreur : Impossible de lier l'utilisateur à une structure active ❌"),
-              backgroundColor: Colors.red
-          ));
-        }
-        return;
+        throw Exception("STRUCTURE_NOT_FOUND|Impossible de lier l'utilisateur à une structure active.");
       }
 
       final targetEmail = emailController.text.trim();
@@ -304,30 +308,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (targetEmail.isNotEmpty) {
         bool emailAvailable = await userService.checkEmailAvailable(targetEmail);
         if (!emailAvailable) {
-          if (mounted) setState(() => isLoading = false);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text("Cette adresse e-mail est déjà prise ❌"),
-                backgroundColor: Colors.red));
-          }
-          return;
+          throw Exception("EMAIL_EXISTS|Cette adresse e-mail est déjà utilisée.");
         }
       }
 
       bool phoneAvailable = await userService.checkPhoneAvailable(targetPhone);
       if (!phoneAvailable) {
-        if (mounted) setState(() => isLoading = false);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text("Ce numéro de téléphone est déjà utilisé ❌"),
-              backgroundColor: Colors.red));
-        }
-        return;
+        throw Exception("PHONE_EXISTS|Ce numéro de téléphone est déjà utilisé.");
       }
 
       String finalPassword = widget.isFromLogin ? passwordController.text.trim() : _generateRandomPin();
-
-      debugPrint("🔑 [TEST LOG] Mot de passe / PIN généré pour $targetName : '$finalPassword'");
 
       final success = await userService.registerUser(
         targetName,
@@ -343,10 +333,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (success) {
         if (mounted) {
           if (widget.isFromLogin) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text("Compte Super admin configuré ! Prochaine étape : Créez votre boutique. ✅"),
-                backgroundColor: Colors.green
-            ));
+            _showSnackBar("SUCCÈS|Compte Super admin configuré avec succès !", Colors.green);
             Navigator.pop(context);
           } else {
             _showShareOptions(targetPhone, targetName, finalPassword);
@@ -356,32 +343,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } catch (e) {
       if (mounted) setState(() => isLoading = false);
 
-      // Nettoyage de la chaîne de l'exception
-      final String rawError = e.toString()
-          .replaceAll("Exception: ", "")
-          .replaceAll("Exception", "")
-          .trim();
+      final appErr = AppException.fromRaw(e);
 
-      debugPrint("🚨 [REGISTER ERROR CATCH] : $rawError");
-
-      if (mounted) {
-        final String lowerError = rawError.toLowerCase();
-
-        // Interception large du message de limite de quota, d'abonnement ou d'erreur de structure
-        if (lowerError.contains("limite") ||
-            lowerError.contains("quota") ||
-            lowerError.contains("abonnement") ||
-            lowerError.contains("maximum")) {
-          _showQuotaLimitDialog(rawError);
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(rawError.isNotEmpty ? rawError : "Une erreur est survenue lors de l'enregistrement ❌"),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ));
-        }
+      if (appErr.code == "QUOTA_EXCEEDED") {
+        _showQuotaLimitDialog(appErr);
+      } else {
+        _showSnackBar("[${appErr.code}] ${appErr.message}", Colors.red);
       }
     }
+  }
+
+  void _showSnackBar(String fullMessage, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(fullMessage),
+        backgroundColor: color,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   @override

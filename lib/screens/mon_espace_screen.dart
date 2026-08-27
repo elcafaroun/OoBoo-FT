@@ -1,12 +1,10 @@
 import 'dart:io';
-
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:http/http.dart' as http;
 import '../services/structure_service.dart';
 import '../services/network_checker.dart';
+import '../services/sync_service.dart';
 import '../models/subscription_plan.dart';
 import 'structure_categories_screen.dart';
 import 'subscription_screen.dart';
@@ -20,6 +18,7 @@ class MonEspaceScreen extends StatefulWidget {
 
 class _MonEspaceScreenState extends State<MonEspaceScreen> {
   final StructureService _structureService = StructureService();
+  final SyncService _syncService = SyncService();
   final ImagePicker _picker = ImagePicker();
   bool isLoading = true;
   bool isCheckingNetwork = false;
@@ -32,7 +31,23 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
     _checkNetworkAndLoad();
   }
 
-  /// Tente d'accéder au serveur, mais bascule gracieusement sur SQLite si offline
+  /// Déclenche la synchronisation globale complète (Queue + Profil + Tables connexes)
+  Future<void> _triggerFullSync() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? userId = prefs.getString('userId');
+
+      if (userId != null && userId.isNotEmpty) {
+        debugPrint("🚀 Déclenchement de la synchronisation globale depuis Mon Espace...");
+        await _syncService.fullSynchronization(userId);
+      } else {
+        debugPrint("⚠️ Impossible de synchroniser : aucun userId trouvé.");
+      }
+    } catch (e) {
+      debugPrint("❌ Erreur lors de la synchronisation : $e");
+    }
+  }
+
   Future<void> _checkNetworkAndLoad() async {
     if (!mounted) return;
     setState(() {
@@ -45,13 +60,14 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       if (mounted) {
         setState(() => isBackendAccessible = online);
       }
-      await _loadStructures();
+      if (online) {
+        await _loadStructures();
+      }
     } catch (e) {
-      debugPrint("⚠️ Erreur lors de la vérification réseau : $e");
+      debugPrint(" Erreur lors de la vérification réseau : $e");
       if (mounted) {
         setState(() => isBackendAccessible = false);
       }
-      await _loadStructures();
     } finally {
       if (mounted) {
         setState(() {
@@ -69,7 +85,6 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       if (userId != null) {
         List<dynamic> result =
         await _structureService.getStructuresByUser(userId);
-        debugPrint("📋 Structures récupérées : $result");
         if (mounted) {
           setState(() {
             userStructures = result;
@@ -77,7 +92,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
         }
       }
     } catch (e) {
-      debugPrint("⚠️ Erreur de chargement des structures : $e");
+      debugPrint(" Erreur de chargement des structures : $e");
     }
   }
 
@@ -86,8 +101,6 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
     final String id =
     (s['idStructure'] ?? s['id'] ?? s['structureId'] ?? '').toString();
     final String nom = s['nomStructure'] ?? s['nom'] ?? 'Structure';
-
-    debugPrint("🚀 Navigation vers l'admin - ID envoyé : $id | Nom : $nom");
 
     await prefs.setString('selected_structure_id', id);
     await prefs.setString('selected_structure_name', nom);
@@ -176,7 +189,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       rawTypes = results[0] ?? [];
       rawVilles = results[1] ?? [];
     } catch (e) {
-      debugPrint("⚠️ Erreur chargement listes types/villes : $e");
+      debugPrint(" Erreur chargement listes types/villes : $e");
     } finally {
       if (mounted) Navigator.pop(context);
     }
@@ -335,10 +348,8 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                               Icons.image_not_supported,
                               color: Colors.grey),
                         )
-                            : const Icon(
-                            Icons.image_not_supported,
-                            size: 40,
-                            color: Colors.grey)))
+                            : const Icon(Icons.image_not_supported,
+                            size: 40, color: Colors.grey)))
                             : Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: const [
@@ -763,22 +774,26 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                               );
 
                               if (mounted) {
-                                Navigator.pop(context); // Ferme le loader
+                                Navigator.pop(context); // Masquer le loader
                                 if (success) {
-                                  Navigator.pop(ctx); // Ferme le dialogue
+                                  Navigator.pop(ctx); // Fermer la boîte de dialogue
+
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
                                       content: Text(
-                                          "Structure mise à jour avec succès ! 🎉"),
+                                          "Structure mise à jour ! Synchronisation en cours..."),
                                       backgroundColor: Colors.green,
                                     ),
                                   );
+
+                                  // 🚀 Lancement de la synchronisation globale
+                                  await _triggerFullSync();
+
                                   _checkNetworkAndLoad();
                                 } else {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
-                                      content: Text(
-                                          "Échec de la mise à jour ❌"),
+                                      content: Text("Échec de la mise à jour"),
                                       backgroundColor: Colors.red,
                                     ),
                                   );
@@ -818,8 +833,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       bool? confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title:
-          Text("${targetStatus ? 'Activer' : 'Désactiver'} la structure"),
+          title: Text("${targetStatus ? 'Activer' : 'Désactiver'} la structure"),
           content: Text(
               "Êtes-vous sûr de vouloir ${targetStatus ? 'activer' : 'désactiver'} cette structure ?"),
           actions: [
@@ -839,11 +853,15 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
         try {
           setState(() => isLoading = true);
           await _structureService.updateStructureStatus(id, targetStatus);
+
+          // 🚀 Lancement de la synchronisation globale après modification du statut
+          await _triggerFullSync();
+
           await _loadStructures();
 
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text("Statut mis à jour avec succès"),
+              content: Text("Statut mis à jour et synchronisé avec succès"),
               backgroundColor: Colors.green,
             ));
           }
@@ -858,6 +876,72 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
         }
       }
     }
+  }
+
+  // Vue bloquante affichée lorsqu'aucune connexion n'est disponible
+  Widget _buildOfflineView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.wifi_off_rounded,
+                size: 64,
+                color: Color(0xFFFF9800),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              "Connexion requise",
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1E293B),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              "L'accès à « Mon Espace » et la gestion des structures nécessitent une connexion internet active.",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 14,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 28),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF9800),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+              onPressed: _checkNetworkAndLoad,
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+              label: const Text(
+                "Vérifier la connexion",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -881,23 +965,33 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
           IconButton(
             icon: const Icon(Icons.refresh_rounded,
                 color: Color(0xFF1E293B), size: 24),
-            onPressed: _checkNetworkAndLoad,
+            onPressed: () async {
+              await _triggerFullSync();
+              _checkNetworkAndLoad();
+            },
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
+        onPressed: !isBackendAccessible
+            ? null
+            : () async {
+          await Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => const SubscriptionScreen(
-                structureId: '', // Corrected: Pass initial empty string or default id
-
+                structureId: '',
               ),
             ),
-          ).then((_) => _checkNetworkAndLoad());
+          );
+
+          // 🚀 Lancement de la synchronisation globale après ajout de structure
+          await _triggerFullSync();
+
+          _checkNetworkAndLoad();
         },
-        backgroundColor: const Color(0xFFFF9800),
+        backgroundColor:
+        !isBackendAccessible ? Colors.grey : const Color(0xFFFF9800),
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text("Ajouter une structure",
             style:
@@ -906,6 +1000,8 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
       body: isLoading
           ? const Center(
           child: CircularProgressIndicator(color: Color(0xFFFF9800)))
+          : (!isBackendAccessible)
+          ? _buildOfflineView()
           : userStructures.isEmpty
           ? Center(
         child: Padding(
@@ -918,33 +1014,15 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                 decoration: BoxDecoration(
                     color: Colors.grey.shade100,
                     shape: BoxShape.circle),
-                child: Icon(Icons.cloud_off_rounded,
+                child: Icon(Icons.storefront_outlined,
                     size: 64, color: Colors.grey.shade400),
               ),
               const SizedBox(height: 24),
-              const Text("Aucun espace trouvé",
+              const Text("Aucune structure enregistrée",
                   style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF1E293B))),
-              const SizedBox(height: 8),
-              const Text(
-                  "Merci de vérifier votre connexion et de réessayer.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: Color(0xFF64748B),
-                      fontSize: 14,
-                      height: 1.4)),
-              const SizedBox(height: 24),
-              TextButton.icon(
-                onPressed: _checkNetworkAndLoad,
-                icon: const Icon(Icons.refresh_rounded,
-                    color: Color(0xFFFF9800)),
-                label: const Text("Réessayer",
-                    style: TextStyle(
-                        color: Color(0xFFFF9800),
-                        fontWeight: FontWeight.bold)),
-              ),
             ],
           ),
         ),
@@ -1132,32 +1210,33 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                     children: [
                       TextButton.icon(
                         style: TextButton.styleFrom(
-                          foregroundColor: expired ? Colors.orange : Colors.green,
+                          foregroundColor:
+                          expired ? Colors.orange : Colors.green,
                         ),
                         onPressed: () async {
-                          // 🔹 Récupération sécurisée de la priorité du plan actuel de la structure
-                          final dynamic rawPriority = s['priorite'] ?? s['priority'] ?? s['planPriorite'];
+                          final dynamic rawPriority = s['priorite'] ??
+                              s['priority'] ??
+                              s['planPriorite'];
                           final int? currentPriority = rawPriority != null
                               ? int.tryParse(rawPriority.toString())
                               : null;
 
-                          final selectedPlan = await Navigator.push<SubscriptionPlan>(
+                          await Navigator.push<SubscriptionPlan>(
                             context,
                             MaterialPageRoute(
                               builder: (_) => SubscriptionScreen(
                                 structureId: id,
-                                filterPriorite: currentPriority, // 👈 Transmission de la priorité
+                                filterPriorite: currentPriority,
                               ),
                             ),
                           );
 
-                          if (selectedPlan != null) {
-                            // Traitement après sélection du plan si nécessaire
-                          }
-
+                          // 🚀 Synchro post-abonnement / renouvellement
+                          await _triggerFullSync();
                           _checkNetworkAndLoad();
                         },
-                        icon: const Icon(Icons.card_membership_rounded, size: 18),
+                        icon: const Icon(Icons.card_membership_rounded,
+                            size: 18),
                         label: Text(
                           expired ? "Renouveler" : "Abonnement",
                           style: const TextStyle(fontWeight: FontWeight.bold),

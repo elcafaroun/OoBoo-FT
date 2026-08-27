@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:fada/utils/constants.dart';
-import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 class CatService {
 
@@ -48,12 +48,12 @@ class CatService {
     }
   }
 
-  // 🔹 3. Créer une catégorie
-
+  // 🔹 3. Créer une catégorie (avec upload photo optionnel)
   Future<Map<String, dynamic>> createCategory({
     required String name,
     required String description,
     required String structureId,
+    File? imageFile,
   }) async {
     final url = Uri.parse('$baseUrl/category');
     final body = jsonEncode({
@@ -71,20 +71,28 @@ class CatService {
     );
 
     if (response.statusCode == 201 || response.statusCode == 200) {
-      return jsonDecode(response.body);
+      final Map<String, dynamic> result = jsonDecode(response.body);
+
+      // Si une photo est fournie, on la téléverse immédiatement après la création
+      if (imageFile != null && await imageFile.exists()) {
+        final String categoryId = result['id'].toString();
+        await uploadPhoto(categoryId, imageFile);
+      }
+
+      return result;
     } else {
-      // Renvoie le message d'erreur textuel renvoyé par le backend
       final errorMsg = response.body.isNotEmpty ? response.body : 'Erreur ${response.statusCode}';
       throw Exception(errorMsg);
     }
   }
 
-  // 🔹 4. Mettre à jour une catégorie
+  // 🔹 4. Mettre à jour une catégorie (met à jour les infos puis la photo si sélectionnée)
   Future<Map<String, dynamic>> updateCategory({
     required String categoryId,
     required String name,
     required String description,
     required String structureId,
+    File? imageFile, // 👈 Ajout du paramètre optionnel imageFile
   }) async {
     final url = Uri.parse('$baseUrl/category/$categoryId');
     final body = jsonEncode({
@@ -100,7 +108,14 @@ class CatService {
     );
 
     if (response.statusCode == 200) {
-      return jsonDecode(response.body);
+      final Map<String, dynamic> result = jsonDecode(response.body);
+
+      // Si une nouvelle image est sélectionnée, on effectue l'upload multipart
+      if (imageFile != null && await imageFile.exists()) {
+        await uploadPhoto(categoryId, imageFile);
+      }
+
+      return result;
     } else {
       throw Exception('Erreur mise à jour catégorie: ${response.statusCode}');
     }

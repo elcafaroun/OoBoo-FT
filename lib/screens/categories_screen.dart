@@ -20,7 +20,12 @@ import '../widgets/product_image_widget.dart';
 class CategoriesScreen extends StatefulWidget {
   final String structureId;
   final String structureName;
-  const CategoriesScreen({super.key, required this.structureId, required this.structureName});
+
+  const CategoriesScreen({
+    super.key,
+    required this.structureId,
+    required this.structureName,
+  });
 
   @override
   State<CategoriesScreen> createState() => _CategoriesScreenState();
@@ -80,10 +85,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
     final prefs = await SharedPreferences.getInstance();
     userProfile = prefs.getString('userProfile');
 
-    // 1. CHARGEMENT IMMÉDIAT ET INCONDITIONNEL DE LA BASE LOCALE (SQLite)
+    // 1. CHARGEMENT IMMÉDIAT DE LA BASE LOCALE (SQLite)
     await _loadFromLocalDatabase();
 
-    // 2. ESSAI DE SYNCHRONISATION ARRIÈRE-PLAN (Sans bloquer si hors-ligne)
+    // 2. SYNCHRONISATION ARRIÈRE-PLAN
     await _syncWithBackendIfOnline();
   }
 
@@ -99,7 +104,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
         setState(() {
           categories = localCats;
           allProducts = localProds;
-          filteredProducts = localProds;
+          _applyFilters();
           _alertCount = localAlerts.length;
           allOrders = localOrders;
           isLoading = false;
@@ -127,9 +132,15 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
 
     if (hasConnection) {
       try {
-        final remoteCats = await _categoryService.getCategoriesByStructure(widget.structureId).timeout(const Duration(seconds: 8));
-        final remoteProds = await _productService.getProductsByStructure(widget.structureId).timeout(const Duration(seconds: 8));
-        final remoteOrders = await _commandService.getCommandsByStructure(widget.structureId).timeout(const Duration(seconds: 8));
+        final remoteCats = await _categoryService
+            .getCategoriesByStructure(widget.structureId)
+            .timeout(const Duration(seconds: 8));
+        final remoteProds = await _productService
+            .getProductsByStructure(widget.structureId)
+            .timeout(const Duration(seconds: 8));
+        final remoteOrders = await _commandService
+            .getCommandsByStructure(widget.structureId)
+            .timeout(const Duration(seconds: 8));
 
         await _dbHelper.syncCategoriesLocal(remoteCats);
         await _dbHelper.syncProductsLocal(remoteProds);
@@ -148,7 +159,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
     }
   }
 
-  /// 🔄 Méthode spécifique pour rafraîchir uniquement les commandes depuis la DB locale
   Future<void> _refreshOrdersOnly() async {
     final localOrders = await _dbHelper.getLocalCommands(widget.structureId);
     if (mounted) {
@@ -159,14 +169,19 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
   }
 
   void _onSearchChanged() {
-    final query = _searchController.text.toLowerCase();
     setState(() {
-      filteredProducts = allProducts.where((p) {
-        final matchesQuery = p['productName'].toString().toLowerCase().contains(query);
-        final matchesCategory = (selectedCategoryId == "TOUS") || (p['categoryId']?.toString() == selectedCategoryId);
-        return matchesQuery && matchesCategory;
-      }).toList();
+      _applyFilters();
     });
+  }
+
+  void _applyFilters() {
+    final query = _searchController.text.toLowerCase().trim();
+    filteredProducts = allProducts.where((p) {
+      final matchesQuery = p['productName'].toString().toLowerCase().contains(query);
+      final matchesCategory = (selectedCategoryId == "TOUS") ||
+          (p['categoryId']?.toString() == selectedCategoryId);
+      return matchesQuery && matchesCategory;
+    }).toList();
   }
 
   Future<void> _scanAndFindProduct() async {
@@ -177,14 +192,37 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
 
     if (codeScanne != null && codeScanne.isNotEmpty) {
       final String cleanCode = codeScanne.toLowerCase().trim();
-      final product = allProducts.firstWhereOrNull((p) => p['productQrCode']?.toString().toLowerCase().trim() == cleanCode);
+      final product = allProducts.firstWhereOrNull(
+              (p) => p['productQrCode']?.toString().toLowerCase().trim() == cleanCode);
 
       if (product != null) {
         final String imageUrl = product['photo'] ?? product['productPhotoUrl'] ?? '';
-        Provider.of<CartProvider>(context, listen: false).addItem(product['id'].toString(), product['productName'], (product['productPrice'] as num).toDouble(), imageUrl, 1);
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Ajouté : ${product['productName']}"), backgroundColor: Colors.green, behavior: SnackBarBehavior.floating));
+        Provider.of<CartProvider>(context, listen: false).addItem(
+          product['id'].toString(),
+          product['productName'],
+          (product['productPrice'] as num).toDouble(),
+          imageUrl,
+          1,
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Ajouté : ${product['productName']}"),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Aucun produit trouvé."), backgroundColor: Colors.red, behavior: SnackBarBehavior.floating));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Aucun produit trouvé."),
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
     }
   }
@@ -226,7 +264,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
               _buildActionButton(Icons.qr_code_scanner, _scanAndFindProduct),
               Badge(
                 isLabelVisible: _pendingOrdersCount > 0,
-                label: Text("$_pendingOrdersCount", style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                label: Text("$_pendingOrdersCount",
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
                 backgroundColor: Colors.orange,
                 child: _buildActionButton(
                   Icons.receipt_long_outlined,
@@ -272,7 +311,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                   child: Icon(Icons.cloud_off_rounded, size: 64, color: Colors.grey.shade400),
                 ),
                 const SizedBox(height: 24),
-                const Text("Aucune donnée disponible", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                const Text(
+                  "Aucune donnée disponible",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                ),
                 const SizedBox(height: 8),
                 const Text(
                   "Connectez-vous à Internet au moins une fois pour télécharger le catalogue de cette structure.",
@@ -383,10 +425,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
               ),
               onPressed: () {
                 Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => NotificationsScreen(structureId: widget.structureId)
-                    )
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => NotificationsScreen(structureId: widget.structureId),
+                  ),
                 );
               },
             ),
@@ -413,7 +455,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
           prefixIcon: const Icon(Icons.search, color: Colors.grey),
           filled: true,
           fillColor: Colors.white,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(15),
+            borderSide: BorderSide.none,
+          ),
         ),
       ),
     );
@@ -429,11 +474,13 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
         itemCount: categories.length + 1,
         itemBuilder: (context, index) {
           final isAll = index == 0;
-          final catId = isAll ? "TOUS" : categories[index - 1]['id'].toString();
+          final cat = isAll ? null : categories[index - 1];
+          final catId = isAll ? "TOUS" : cat['id'].toString();
           final isSelected = selectedCategoryId == catId;
+
           String networkUrl = "";
-          if (!isAll) {
-            final photoCat = categories[index - 1]['photoCat'];
+          if (!isAll && cat != null) {
+            final photoCat = cat['photoCat'];
             if (photoCat != null && photoCat.toString() != "null" && photoCat.toString().isNotEmpty) {
               networkUrl = "$baseUrl/category/image/$photoCat";
             }
@@ -441,8 +488,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
 
           return GestureDetector(
             onTap: () {
-              setState(() => selectedCategoryId = catId);
-              _onSearchChanged();
+              setState(() {
+                selectedCategoryId = catId;
+                _applyFilters();
+              });
             },
             child: Container(
               width: 75,
@@ -455,26 +504,34 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: isSelected ? Colors.orange : Colors.white,
-                      border: Border.all(color: isSelected ? Colors.orange : Colors.grey.shade200, width: 2),
+                      border: Border.all(
+                        color: isSelected ? Colors.orange : Colors.grey.shade200,
+                        width: 2,
+                      ),
                     ),
                     child: Center(
                       child: isAll
                           ? Icon(Icons.apps, color: isSelected ? Colors.white : Colors.grey)
                           : ClipOval(
                         child: ProductImageWidget(
-                          key: ValueKey("cat_${categories[index - 1]['id']}_${categories[index - 1]['photoPath'] ?? 'no_path'}"),
-                          localPath: categories[index - 1]['photoPath'] ?? '',
+                          key: ValueKey("cat_${cat['id']}"),
+                          localPath: cat['photoPath'] ?? '',
                           networkUrl: networkUrl,
                           borderRadius: BorderRadius.circular(30),
                         ),
                       ),
                     ),
                   ),
+                  const SizedBox(height: 4),
                   Text(
-                    isAll ? "Tout" : categories[index - 1]['nameCat'] ?? '',
-                    style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500),
+                    isAll ? "Tout" : (cat['nameCat'] ?? ''),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    ),
                     textAlign: TextAlign.center,
                     maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
               ),
@@ -486,6 +543,15 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
   }
 
   Widget _buildProductGrid() {
+    if (filteredProducts.isEmpty) {
+      return const Center(
+        child: Text(
+          "Aucun produit trouvé",
+          style: TextStyle(color: Colors.grey, fontSize: 14),
+        ),
+      );
+    }
+
     return GridView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -504,7 +570,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(20),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10)],
+              boxShadow: [
+                BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10),
+              ],
             ),
             child: Column(
               children: [
@@ -512,7 +580,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                     child: ProductImageWidget(
-                      key: ValueKey("${p['id']}_${p['photoPath'] ?? 'no_path'}"),
+                      key: ValueKey("prod_${p['id']}"),
                       localPath: p['photoPath'],
                       networkUrl: imageUrl,
                     ),
@@ -528,6 +596,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
+                      const SizedBox(height: 4),
                       Text(
                         "${p['productPrice']} FCFA",
                         style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.w900),
@@ -547,7 +616,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
     int quantity = 1;
     final String rawDescription = p['productDescription'] ?? '';
 
-    // Extrait et nettoie les sous-éléments séparés par des virgules
     final List<String> detailsList = rawDescription
         .split(',')
         .map((e) => e.trim())
@@ -570,6 +638,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
               child: Column(
                 children: [
                   ProductImageWidget(
+                    key: ValueKey("detail_${p['id']}"),
                     localPath: p['photoPath'],
                     networkUrl: imageUrl,
                     height: 260,
@@ -592,7 +661,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                               ),
                               Text(
                                 "${p['productPrice']} FCFA",
-                                style: const TextStyle(fontSize: 18, color: Colors.orange, fontWeight: FontWeight.w900),
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.orange,
+                                  fontWeight: FontWeight.w900,
+                                ),
                               ),
                             ],
                           ),
@@ -602,11 +675,15 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                             children: [
                               IconButton(
                                 icon: const Icon(Icons.remove_circle_outline, size: 28),
-                                onPressed: () => quantity > 1 ? setModalState(() => quantity--) : null,
+                                onPressed: () =>
+                                quantity > 1 ? setModalState(() => quantity--) : null,
                               ),
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                                child: Text("$quantity", style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                                child: Text(
+                                  "$quantity",
+                                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                                ),
                               ),
                               IconButton(
                                 icon: const Icon(Icons.add_circle_outline, color: Colors.orange, size: 28),
@@ -632,17 +709,26 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                               );
                               Navigator.pop(context);
                             },
-                            child: const Text("AJOUTER AU PANIER", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                            child: const Text(
+                              "AJOUTER AU PANIER",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
                           ),
-
-                          // 🔹 LISTE DE CARACTÉRISTIQUES AVEC COCHES (CHECKMARKS)
                           if (detailsList.isNotEmpty) ...[
                             const SizedBox(height: 25),
                             const Divider(height: 1, color: Color(0xFFF1F5F9)),
                             const SizedBox(height: 20),
                             const Text(
                               "Caractéristiques",
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF1E293B),
+                              ),
                             ),
                             const SizedBox(height: 12),
                             Column(
@@ -655,13 +741,13 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                                       Container(
                                         padding: const EdgeInsets.all(2),
                                         decoration: const BoxDecoration(
-                                          color: Color(0xFFDCFCE7), // Vert pastel clair
+                                          color: Color(0xFFDCFCE7),
                                           shape: BoxShape.circle,
                                         ),
                                         child: const Icon(
                                           Icons.check_rounded,
                                           size: 16,
-                                          color: Color(0xFF16A34A), // Vert validation
+                                          color: Color(0xFF16A34A),
                                         ),
                                       ),
                                       const SizedBox(width: 12),
@@ -698,7 +784,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
   Widget _buildCartBadge() {
     return Consumer<CartProvider>(
       builder: (context, cart, _) => Badge(
-        label: Text("${cart.items.length}", style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+        label: Text("${cart.items.length}",
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
         isLabelVisible: cart.items.isNotEmpty,
         backgroundColor: Colors.orange,
         padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -707,7 +794,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
           constraints: const BoxConstraints(),
           icon: const Icon(Icons.shopping_cart_outlined, size: 26),
           color: Colors.black,
-          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CartScreen())),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const CartScreen()),
+          ),
         ),
       ),
     );

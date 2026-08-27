@@ -20,69 +20,98 @@ class ProductImageWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 1. Vérification du fichier local
-    final bool hasLocalFile = localPath != null &&
-        localPath!.isNotEmpty &&
+    // 1. Assainissement du chemin local
+    final String? cleanPath = (localPath != null &&
         localPath != "null" &&
-        File(localPath!).existsSync();
+        localPath!.trim().isNotEmpty)
+        ? localPath!.trim()
+        : null;
 
-    // 2. Vérification de l'URL réseau
+    bool hasValidLocalFile = false;
+    File? imageFile;
+
+    if (cleanPath != null) {
+      try {
+        final file = File(cleanPath);
+        if (file.existsSync() && file.lengthSync() > 0) {
+          hasValidLocalFile = true;
+          imageFile = file;
+        }
+      } catch (_) {
+        hasValidLocalFile = false;
+      }
+    }
+
     final bool hasNetworkUrl = networkUrl.isNotEmpty &&
         networkUrl != "null" &&
         networkUrl.startsWith("http");
 
     Widget content;
 
-    if (hasLocalFile) {
-      // 💡 Astuce radicale : On vide explicitement le cache de l'image locale
-      // pour obliger Flutter à recharger physiquement le fichier du disque à chaque affichage.
-      final file = File(localPath!);
-      final fileImage = FileImage(file);
-      fileImage.evict(); // Supprime l'ancienne image du cache Flutter
-
-      content = Image(
-        image: fileImage,
+    if (hasValidLocalFile && imageFile != null) {
+      content = Image.file(
+        imageFile,
+        key: ValueKey("file_${imageFile.path}_${imageFile.lastModifiedSync().millisecondsSinceEpoch}"),
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _buildErrorPlaceholder(),
+        gaplessPlayback: true, // 🟢 Conserve l'image affichée lors du rebuild
+        errorBuilder: (_, __, ___) => _buildNetworkOrPlaceholder(hasNetworkUrl),
       );
     } else if (hasNetworkUrl) {
-      content = CachedNetworkImage(
-        imageUrl: networkUrl,
-        cacheKey: networkUrl, // Force le rafraîchissement si l'URL change
-        fit: BoxFit.cover,
-        placeholder: (context, url) => const Center(
-          child: SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2)
-          ),
-        ),
-        errorWidget: (context, url, error) => _buildErrorPlaceholder(),
-      );
+      content = _buildCachedNetworkImage();
     } else {
       content = _buildErrorPlaceholder();
     }
 
-    // Application du clip et des dimensions
-    final Widget container = SizedBox(
+    Widget container = SizedBox(
       width: width ?? double.infinity,
       height: height ?? double.infinity,
-      child: borderRadius != null
-          ? ClipRRect(borderRadius: borderRadius!, child: content)
-          : content,
+      child: content,
     );
 
-    // Retourner le conteneur enveloppé dans un KeyedSubtree unique basé sur le chemin et la date du fichier
-    return KeyedSubtree(
-      key: ValueKey("${localPath ?? ''}_${hasLocalFile ? File(localPath!).lastModifiedSync().millisecondsSinceEpoch : 0}_$networkUrl"),
-      child: container,
+    if (borderRadius != null) {
+      container = ClipRRect(
+        borderRadius: borderRadius!,
+        child: container,
+      );
+    }
+
+    return container;
+  }
+
+  Widget _buildNetworkOrPlaceholder(bool hasNetworkUrl) {
+    if (hasNetworkUrl) {
+      return _buildCachedNetworkImage();
+    }
+    return _buildErrorPlaceholder();
+  }
+
+  Widget _buildCachedNetworkImage() {
+    return CachedNetworkImage(
+      key: ValueKey("net_$networkUrl"),
+      imageUrl: networkUrl,
+      fit: BoxFit.cover,
+      fadeInDuration: Duration.zero,
+      fadeOutDuration: Duration.zero,
+      placeholder: (context, url) => Container(
+        color: Colors.grey[100],
+        child: const Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange),
+          ),
+        ),
+      ),
+      errorWidget: (context, url, error) => _buildErrorPlaceholder(),
     );
   }
 
   Widget _buildErrorPlaceholder() {
     return Container(
       color: Colors.grey[100],
-      child: const Icon(Icons.image_not_supported, color: Colors.grey),
+      child: const Center(
+        child: Icon(Icons.image_not_supported_rounded, color: Colors.grey, size: 24),
+      ),
     );
   }
 }

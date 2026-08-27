@@ -12,7 +12,7 @@ class UserService {
   Future<bool> registerUser(
       String name,
       String phone,
-      String email,
+      String? email,
       String password,
       String profile,
       String? codeStructure,
@@ -20,63 +20,95 @@ class UserService {
     bool isOnline = await NetworkChecker.isBackendAccessible();
     if (!isOnline) {
       throw Exception(
-        "OFFLINE_ERROR|Connexion Internet requise. L'enregistrement des utilisateurs ne peut pas se faire hors-ligne.",
+        "OFFLINE_ERROR|Connexion Internet requise. L'enregistrement ne peut pas se faire hors-ligne.",
       );
     }
 
     try {
-      // 2️⃣ Construction de l'URL avec Query Parameter
       final String urlString =
       (codeStructure != null && codeStructure.trim().isNotEmpty)
           ? '$baseUrl/user?codeStructure=${Uri.encodeComponent(codeStructure.trim())}'
           : '$baseUrl/user';
 
-      // 3️⃣ Envoi de la requête HTTP
+      // 💡 Nettoyage du payload : ne pas envoyer une chaîne vide "" pour l'email
+      final Map<String, dynamic> bodyPayload = {
+        'userName': name.trim(),
+        'userPhone': phone.trim(),
+        'userPassword': password,
+        'userProfile': profile,
+      };
+
+      if (email != null && email.trim().isNotEmpty) {
+        bodyPayload['userEmail'] = email.trim().toLowerCase();
+      }
+
       final response = await http
           .post(
         Uri.parse(urlString),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'userName': name,
-          'userPhone': phone,
-          'userEmail': email,
-          'userPassword': password,
-          'userProfile': profile,
-        }),
+        headers: {'Content-Type': 'application/json; charset=UTF-8'},
+        body: jsonEncode(bodyPayload),
       )
           .timeout(
         const Duration(seconds: 10),
         onTimeout: () {
-          throw Exception("TIMEOUT_ERROR|Le serveur met trop de temps à répondre.");
+          throw Exception(
+            "TIMEOUT_ERROR|Le serveur met trop de temps à répondre.",
+          );
         },
       );
 
-      // 4️⃣ Traitement de la réponse
       if (response.statusCode == 200 || response.statusCode == 201) {
         return true;
       } else {
-        String errorMessage = "Erreur d'enregistrement (${response.statusCode})";
-        String errorCode = "UNKNOWN_ERROR";
+        String errorMessage = "Erreur lors de l'enregistrement";
+        String errorCode = "HTTP_${response.statusCode}";
 
         if (response.body.isNotEmpty) {
           try {
             final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-            errorMessage = decoded['message'] ?? response.body;
-            errorCode = decoded['code'] ?? "HTTP_${response.statusCode}";
+
+            if (decoded is Map<String, dynamic>) {
+              // 1. Extraction du code d'erreur personnalisé
+              errorCode = decoded['code'] ??
+                  decoded['errorCode'] ??
+                  decoded['status']?.toString() ??
+                  errorCode;
+
+              // 2. Extraction du message d'erreur
+              errorMessage = decoded['message'] ??
+                  decoded['detail'] ??
+                  decoded['error'] ??
+                  decoded['description'] ??
+                  response.body;
+
+              // 3. Gestion des erreurs de validation Spring (@Valid / BindingResult)
+              if (decoded.containsKey('errors') && decoded['errors'] is List) {
+                final List errors = decoded['errors'];
+                if (errors.isNotEmpty) {
+                  errorMessage = errors
+                      .map((e) => e['defaultMessage'] ?? e.toString())
+                      .join(', ');
+                }
+              }
+            } else if (decoded is String) {
+              errorMessage = decoded;
+            }
           } catch (_) {
-            errorMessage = response.body;
+            // Fallback si le corps de réponse est du texte brut
+            errorMessage = response.body.isNotEmpty ? response.body : errorMessage;
           }
         }
-        // Formatage standardisé 'CODE|MESSAGE' pour l'UI
+
         throw Exception("$errorCode|$errorMessage");
       }
     } catch (e) {
-      debugPrint(" Erreur enregistrement utilisateur online : $e");
-      rethrow; // Propagation pour capture dans l'UI
+      debugPrint("Erreur enregistrement utilisateur online : $e");
+      rethrow;
     }
   }
 
-  /// 🔹 Vérifier la disponibilité d'un Email auprès de l'API Spring Boot
+
+
   Future<bool> checkEmailAvailable(String email) async {
     try {
       final response = await http.get(
@@ -86,20 +118,16 @@ class UserService {
 
       if (response.statusCode == 200) {
         final dynamic data = jsonDecode(response.body);
-        if (data is Map) {
-          return data['available'] ?? false;
-        } else if (data is bool) {
-          return data;
-        }
+        if (data is Map) return data['available'] ?? false;
+        if (data is bool) return data;
       }
       return false;
     } catch (e) {
       debugPrint("Erreur lors de la vérification de l'email : $e");
-      return false;
+      throw Exception("CHECK_EMAIL_ERROR|Impossible de vérifier la disponibilité de l'email.");
     }
   }
 
-  /// 🔹 Vérifier la disponibilité d'un Numéro de Téléphone auprès de l'API Spring Boot
   Future<bool> checkPhoneAvailable(String phone) async {
     try {
       final response = await http.get(
@@ -109,31 +137,32 @@ class UserService {
 
       if (response.statusCode == 200) {
         final dynamic data = jsonDecode(response.body);
-        if (data is Map) {
-          return data['available'] ?? false;
-        } else if (data is bool) {
-          return data;
-        }
+        if (data is Map) return data['available'] ?? false;
+        if (data is bool) return data;
       }
       return false;
     } catch (e) {
       debugPrint("Erreur lors de la vérification du téléphone : $e");
-      return false;
+      throw Exception("CHECK_PHONE_ERROR|Impossible de vérifier la disponibilité du numéro.");
     }
   }
 
-  /// 🔹 Connexion Hybride (Online Multi-structure / Fallback Offline)
   Future<Map<String, dynamic>> login(String identifier, String password) async {
     bool serverIsUp = await NetworkChecker.isBackendAccessible();
 
     if (serverIsUp) {
       try {
-        debugPrint('➡️ Mode Online : Envoi des identifiants au backend');
+        debugPrint(' Mode Online : Envoi des identifiants au backend');
         final response = await http.post(
           Uri.parse('$baseUrl/user/login'),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'identifier': identifier, 'password': password}),
-        ).timeout(const Duration(seconds: 5));
+        ).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            throw Exception("TIMEOUT_ERROR|Délai d'attente dépassé lors de la connexion.");
+          },
+        );
 
         if (response.statusCode == 200) {
           final data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -162,7 +191,6 @@ class UserService {
               await prefs.setString('cached_user_structures', jsonEncode(userStructures));
             }
 
-            // ✅ Synchronisation SQLite locale
             await _dbHelper.saveOrUpdateUserLocal({
               'id': userId,
               'userName': data['userName'] ?? identifier,
@@ -182,16 +210,18 @@ class UserService {
             return data;
           }
         } else if (response.statusCode == 401 || response.statusCode == 403) {
-          debugPrint('🚫 Identifiants incorrects sur le serveur');
           throw Exception('INVALID_CREDENTIALS|Identifiants invalides.');
+        } else {
+          throw Exception('HTTP_${response.statusCode}|Erreur de connexion au serveur (${response.statusCode}).');
         }
       } catch (e) {
-        debugPrint('⚠️ Micro-coupure ou problème lors de la requête en ligne : $e');
+        debugPrint(' Micro-coupure ou problème lors de la requête en ligne : $e');
+        if (e.toString().contains("INVALID_CREDENTIALS")) rethrow;
       }
     }
 
-    // 2️⃣ MODE FALLBACK AUTOMATIQUE OFFLINE
-    debugPrint('📥 Basculement : Tentative de connexion via SQLite (Mode Offline)...');
+    // MODE FALLBACK AUTOMATIQUE OFFLINE
+    debugPrint(' Basculement : Tentative de connexion via SQLite (Mode Offline)...');
     final localUser = await _dbHelper.getUserByIdentifier(identifier);
 
     if (localUser != null) {
@@ -208,7 +238,6 @@ class UserService {
         await prefs.setString('codeStructure', localUser['codeStructure'].toString());
       }
 
-      debugPrint('💾 Connexion réussie hors-ligne via SQLite pour : $identifier');
       return Map<String, dynamic>.from(localUser);
     }
 
@@ -222,20 +251,17 @@ class UserService {
         headers: {'Content-Type': 'application/json'},
       );
 
-      debugPrint("DEBUG JSON REÇU : ${response.body}");
-
       if (response.statusCode == 200) {
         return jsonDecode(utf8.decode(response.bodyBytes));
       } else {
-        return [];
+        throw Exception("HTTP_${response.statusCode}|Échec de la récupération des utilisateurs.");
       }
     } catch (e) {
       debugPrint("Erreur récupération : $e");
-      return [];
+      rethrow;
     }
   }
 
-  /// 🔹 Modifier un utilisateur
   Future<bool> updateUser(String id, Map<String, dynamic> userData) async {
     try {
       final response = await http.put(
@@ -243,14 +269,14 @@ class UserService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(userData),
       );
-      return response.statusCode == 200;
+      if (response.statusCode == 200) return true;
+      throw Exception("HTTP_${response.statusCode}|Échec de la modification de l'utilisateur.");
     } catch (e) {
       debugPrint("Erreur modification utilisateur : $e");
-      return false;
+      rethrow;
     }
   }
 
-  /// 🔹 Activer/Désactiver l'accès d'un compte utilisateur
   Future<bool> toggleUserStatus(String id, bool shouldEnable) async {
     final String action = shouldEnable ? "enable" : "disable";
 
@@ -259,14 +285,14 @@ class UserService {
         Uri.parse('$baseUrl/user/$action/$id'),
         headers: {'Content-Type': 'application/json'},
       );
-      return response.statusCode == 200 || response.statusCode == 204;
+      if (response.statusCode == 200 || response.statusCode == 204) return true;
+      throw Exception("HTTP_${response.statusCode}|Échec du changement de statut utilisateur.");
     } catch (e) {
       debugPrint("Erreur changement de statut : $action - $e");
-      return false;
+      rethrow;
     }
   }
 
-  /// 🔹 Réinitialiser le mot de passe d'un utilisateur
   Future<bool> resetPassword(String userId, String newPassword) async {
     try {
       final response = await http.patch(
@@ -274,14 +300,14 @@ class UserService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'newPassword': newPassword}),
       );
-      return response.statusCode == 200;
+      if (response.statusCode == 200) return true;
+      throw Exception("HTTP_${response.statusCode}|Échec de la réinitialisation du mot de passe.");
     } catch (e) {
       debugPrint("Erreur réinitialisation mot de passe : $e");
-      return false;
+      rethrow;
     }
   }
 
-  /// 🔹 Mettre à jour le mot de passe initial
   Future<bool> changeFirstPassword(String userId, String newPassword) async {
     try {
       final response = await http.patch(
@@ -289,29 +315,27 @@ class UserService {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'newPassword': newPassword}),
       );
-      return response.statusCode == 200;
+      if (response.statusCode == 200) return true;
+      throw Exception("HTTP_${response.statusCode}|Erreur lors de la modification du premier mot de passe.");
     } catch (e) {
       debugPrint("Erreur changement premier mot de passe : $e");
-      return false;
+      rethrow;
     }
   }
 
   Future<void> disableUser(String userId) async {
     final url = Uri.parse('$baseUrl/user/disable/$userId');
-    debugPrint("🚀 Tentative d'appel à l'URL : $url");
     try {
       final response = await http.patch(url);
-      if (response.statusCode == 204) {
-        debugPrint("✅ Utilisateur désactivé avec succès");
-      } else {
-        debugPrint("❌ Erreur serveur (${response.statusCode}) : ${response.body}");
+      if (response.statusCode != 204) {
+        throw Exception("HTTP_${response.statusCode}|Erreur lors de la désactivation (${response.statusCode}).");
       }
     } catch (e) {
-      debugPrint("❌ Exception : $e");
+      debugPrint(" Exception : $e");
+      rethrow;
     }
   }
 
-  /// 🔹 Utilitaire d'extraction d'ID utilisateur dans les payloads
   String? _extractUserId(Map<String, dynamic> data) {
     if (data['id'] != null) return data['id'].toString();
     if (data['user'] != null && data['user']['id'] != null) return data['user']['id'].toString();

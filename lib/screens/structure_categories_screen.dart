@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/cat_service.dart';
-import '../services/network_checker.dart'; // ✅ Intégration de ton service réseau
+import '../services/network_checker.dart';
 import 'category_products_screen.dart';
 import 'structure_admin_screen.dart';
 
@@ -44,7 +46,6 @@ class _StructureCategoriesScreenState extends State<StructureCategoriesScreen> {
     });
 
     try {
-      // ✅ Appel direct de ton service centralisé Actuator/Connectivity
       bool online = await NetworkChecker.isBackendAccessible();
 
       if (!online) {
@@ -320,61 +321,171 @@ class _StructureCategoriesScreenState extends State<StructureCategoriesScreen> {
     );
   }
 
+  /// ✏️ Pop-up de modification avec sélection d'image
   void _showEditDialog(dynamic cat) {
     final TextEditingController nameController = TextEditingController(text: cat['nameCat']);
     final TextEditingController descController = TextEditingController(text: cat['description']);
+    File? selectedImage;
+    bool isSaving = false;
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text("Modifier la catégorie", style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: "Nom", labelStyle: TextStyle(color: Colors.grey)),
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> pickImage(ImageSource source) async {
+            final ImagePicker picker = ImagePicker();
+            final XFile? image = await picker.pickImage(source: source, imageQuality: 80);
+            if (image != null) {
+              setDialogState(() {
+                selectedImage = File(image.path);
+              });
+            }
+          }
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text("Modifier la catégorie", style: TextStyle(fontWeight: FontWeight.bold)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Zone de prévisualisation et sélection de l'image
+                  GestureDetector(
+                    onTap: () {
+                      showModalBottomSheet(
+                        context: context,
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                        ),
+                        builder: (_) => SafeArea(
+                          child: Wrap(
+                            children: [
+                              ListTile(
+                                leading: const Icon(Icons.photo_library_rounded, color: Color(0xFFFF9800)),
+                                title: const Text("Galerie"),
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  pickImage(ImageSource.gallery);
+                                },
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.camera_alt_rounded, color: Color(0xFFFF9800)),
+                                title: const Text("Appareil photo"),
+                                onTap: () {
+                                  Navigator.pop(context);
+                                  pickImage(ImageSource.camera);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                    child: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        Container(
+                          width: 100,
+                          height: 100,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFF9800).withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.orange.shade200, width: 1.5),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: selectedImage != null
+                                ? Image.file(selectedImage!, fit: BoxFit.cover)
+                                : (cat['categoryPhotoUrl'] != null &&
+                                cat['categoryPhotoUrl'].toString().isNotEmpty &&
+                                cat['categoryPhotoUrl'].toString().startsWith('http'))
+                                ? Image.network(cat['categoryPhotoUrl'], fit: BoxFit.cover)
+                                : const Icon(Icons.category_rounded, size: 40, color: Color(0xFFFF9800)),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFFF9800),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.camera_alt, color: Colors.white, size: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: "Nom",
+                      labelStyle: TextStyle(color: Colors.grey),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descController,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: "Description",
+                      labelStyle: TextStyle(color: Colors.grey),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: descController,
-              decoration: const InputDecoration(labelText: "Description", labelStyle: TextStyle(color: Colors.grey)),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Annuler", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold))
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF9800),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: () async {
-              try {
-                await _catService.updateCategory(
-                  categoryId: cat['id'].toString(),
-                  name: nameController.text,
-                  description: descController.text,
-                  structureId: widget.structureId,
-                );
-                if (context.mounted) Navigator.pop(context);
-                _checkNetworkAndLoad();
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Modifié avec succès !"), backgroundColor: Colors.green));
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Erreur modification"), backgroundColor: Colors.red));
-                }
-              }
-            },
-            child: const Text("Enregistrer", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          ),
-        ],
+            actions: [
+              TextButton(
+                onPressed: isSaving ? null : () => Navigator.pop(context),
+                child: const Text("Annuler", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFF9800),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                  setDialogState(() => isSaving = true);
+                  try {
+                    await _catService.updateCategory(
+                      categoryId: cat['id'].toString(),
+                      name: nameController.text.trim(),
+                      description: descController.text.trim(),
+                      structureId: widget.structureId,
+                      imageFile: selectedImage, // Transmission de la nouvelle image
+                    );
+                    if (context.mounted) Navigator.pop(context);
+                    _checkNetworkAndLoad();
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("✅ Modifié avec succès !"), backgroundColor: Colors.green),
+                      );
+                    }
+                  } catch (e) {
+                    setDialogState(() => isSaving = false);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text("Erreur modification : $e"), backgroundColor: Colors.red),
+                      );
+                    }
+                  }
+                },
+                child: isSaving
+                    ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                )
+                    : const Text("Enregistrer", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

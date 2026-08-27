@@ -349,26 +349,36 @@ class _CustomerDialogState extends State<CustomerDialog> {
       'id': customerId,
       'numCust': phone,
       'codePin': null,
-      'customerName': name,
+      'customerName': name, // Le nom saisi dans le champ
       'codeStructure': codeStructure,
       'createdDate': existing.isNotEmpty
           ? (existing.first['createdDate'] ?? DateTime.now().toIso8601String())
           : DateTime.now().toIso8601String(),
       'version': currentVersion,
+      'isSynced': 0, // Défini à 0 jusqu'à confirmation de synchro serveur
     };
 
+    // 💥 ETAPE CLEF : Sauvegarder d'abord IMMÉDIATEMENT en local dans SQLite !
+    await _dbHelper.saveCustomerLocal(customerPayload);
+
+    // Tentative d'envoi API
     try {
-      if (existing.isNotEmpty) {
-        await customerService.updateCustomer(customerPayload);
-        debugPrint("🔄 Tentative de mise à jour du client effectuée via CustomerService.");
+      bool isOnline = await NetworkChecker.isBackendAccessible();
+      if (isOnline) {
+        if (existing.isNotEmpty) {
+          await customerService.updateCustomer(customerPayload);
+        } else {
+          await customerService.createCustomer(customerPayload);
+        }
+        // Marquer comme synchronisé en local si l'API répond avec succès
+        await db.update('customers', {'isSynced': 1}, where: 'id = ?', whereArgs: [customerId]);
+        debugPrint("✅ Client $name ($phone) envoyé au serveur et synchronisé localement.");
       } else {
-        await customerService.createCustomer(customerPayload);
-        debugPrint("✨ Tentative de création du client effectuée via CustomerService.");
+        // Hors-ligne : ajouter dans la file sync_queue
+        await _addToSyncQueue(db, customerId, customerPayload, existing.isNotEmpty);
       }
     } catch (e) {
-      debugPrint("⚠️ Erreur lors de l'appel au CustomerService (Mode Hors-ligne) : $e");
-
-      await _dbHelper.saveCustomerLocal(customerPayload);
+      debugPrint("⚠️ Erreur lors de l'envoi API du client : $e");
       await _addToSyncQueue(db, customerId, customerPayload, existing.isNotEmpty);
     }
   }
@@ -472,11 +482,16 @@ class _CustomerDialogState extends State<CustomerDialog> {
                   final name = _nameController.text.trim();
 
                   if (phone.isNotEmpty && name.isNotEmpty) {
+                    // 1. Afficher un mini-loader ou bloquer la double validation
+                    setState(() => _isSearching = true);
+
+                    // 2. Await impératif pour écrire en base avant de dépiler l'écran
                     await _saveOrUpdateCustomer(phone, name);
 
                     if (mounted) {
-                      Navigator.pop(context);
-                      widget.onValidated(phone, name);
+                      setState(() => _isSearching = false);
+                      Navigator.pop(context); // Fermer le modal
+                      widget.onValidated(phone, name); // Déclencher la commande avec le bon nom
                     }
                   }
                 },

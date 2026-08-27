@@ -50,58 +50,97 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Affichage de la modale bloquante de synchronisation
+  void _showSyncProgressDialog({required String title, required String message}) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false, // Bloque le retour arrière physique sur Android
+        child: Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(color: Color(0xFFFF9800)),
+                const SizedBox(height: 20),
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.grey, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleStartup() async {
-    //setState(() => _isInitialSyncing = true);
     try {
       final prefs = await SharedPreferences.getInstance();
       final String? savedUserId = prefs.getString('userId');
-    //  final String activeStructureId = prefs.getString('selected_structure_id') ?? _idStructure ?? "";
 
       if (savedUserId != null && savedUserId.isNotEmpty) {
-        // 1. Charger d'abord les données locales de l'utilisateur pour alimenter l'interface instantanément
+        // 1. Charger d'abord les données locales
         await _loadUserProfile();
 
-        // 2. Tenter une synchronisation globale au démarrage si le réseau est accessible
+        if (mounted) setState(() => _isInitialSyncing = false);
+
+        // 2. Vérification première connexion & réseau
         if (await NetworkChecker.isBackendAccessible()) {
-          debugPrint(
-              "🌐 Connexion détectée au démarrage, lancement de la synchro globale...");
-
-          // On récupère l'ID de structure sélectionné ou l'ID technique par défaut de l'utilisateur
-
-
           final bool isFirstLoginDone = await _dbHelper.getSettingBool(
               'first_login_completed', defaultValue: false);
 
           if (!isFirstLoginDone) {
-            if (await NetworkChecker.isBackendAccessible()) {
-              debugPrint(" Premières connexion / initialisation détectée...");
+            debugPrint("🚀 Première connexion détectée, ouverture du popup de synchro...");
 
-              // Exécution de la synchronisation ou action initiale
-              await _syncService.fullSynchronization(savedUserId);
+            // Attendre la fin du premier frame pour afficher le dialog en toute sécurité
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              if (!mounted) return;
 
-              // Passage de la variable à true pour ne plus repasser ici aux prochains démarrages
-              await _dbHelper.setSettingBool('first_login_completed', true);
+              _showSyncProgressDialog(
+                title: "Initialisation en cours...",
+                message: "Téléchargement initial des données de votre compte. Veuillez patienter.",
+              );
 
-              // Recharger le profil après mise à jour
-              await _loadUserProfile();
-            } else {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _showSnackBar(
-                    "Mode hors-ligne : Première synchronisation en attente.",
-                    Colors.orange);
-              });
-            }
+              try {
+                await _syncService.fullSynchronization(savedUserId);
+                await _dbHelper.setSettingBool('first_login_completed', true);
+                await _loadUserProfile();
+                await _loadLastSyncDate();
+                await _refreshPendingCount();
+
+                if (mounted) {
+                  Navigator.pop(context); // Fermeture du dialog
+                  _showSnackBar("Initialisation réussie ✅", Colors.green);
+                }
+              } catch (e) {
+                if (mounted) {
+                  Navigator.pop(context); // Fermeture du dialog en cas d'erreur
+                  _showSnackBar("Erreur lors de l'initialisation : $e", Colors.redAccent);
+                }
+              }
+            });
           } else {
             debugPrint(" Initialisation déjà effectuée précédemment.");
+            await _loadLastSyncDate();
+            await _refreshPendingCount();
           }
-
-          await _loadLastSyncDate();
-          await _refreshPendingCount();
         }
+      } else {
+        if (mounted) setState(() => _isInitialSyncing = false);
       }
     } catch (e) {
       debugPrint("❌ Erreur démarrage : $e");
-    } finally {
       if (mounted) setState(() => _isInitialSyncing = false);
     }
   }
@@ -112,7 +151,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (lastSync != null) {
       DateTime dt = DateTime.parse(lastSync);
       setState(() {
-        _lastSyncDateLabel = "${dt.day}/${dt.month} à ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
+        _lastSyncDateLabel =
+        "${dt.day}/${dt.month} à ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
       });
     }
   }
@@ -130,13 +170,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _userName = userMap['userName'];
           _userProfile = userMap['userProfile'];
           _codeStructure = userMap['codeStructure'];
-          // Récupération sécurisée de l'identifiant technique idStructure
-          _idStructure = userMap['idStructure']?.toString() ?? userMap['structureId']?.toString();
+          _idStructure = userMap['idStructure']?.toString() ??
+              userMap['structureId']?.toString();
 
           final String? lastSync = userMap['updatedAt'];
           if (lastSync != null) {
             DateTime dt = DateTime.parse(lastSync);
-            _lastSyncDateLabel = "${dt.day}/${dt.month} à ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
+            _lastSyncDateLabel =
+            "${dt.day}/${dt.month} à ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
           }
         });
       }
@@ -146,33 +187,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _refreshPendingCount() async {
     try {
       final db = await _dbHelper.database;
-      final res = await db.rawQuery("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
+      final res = await db.rawQuery(
+          "SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
       if (mounted) setState(() => _pendingSyncCount = res.first['count'] as int);
     } catch (e) {
       debugPrint("Erreur sync_queue : $e");
     }
   }
 
+  /// Synchronisation manuelle via le bouton Dashboard
   Future<void> _handleManualSync() async {
     bool online = await NetworkChecker.isBackendAccessible();
     if (!online) {
       _showSnackBar("Aucune connexion au serveur ❌", Colors.redAccent);
       return;
     }
-    _showSnackBar("Synchronisation en cours...", Colors.orange);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      // Utilisation prioritaire de l'ID de structure stocké ou de _idStructure
-      final String activeStructureId = prefs.getString('selected_structure_id') ?? _idStructure ?? "";
 
-      // CORRECTION : On transmet bien l'idStructure et non le codeStructure
+    _showSyncProgressDialog(
+      title: "Synchronisation en cours...",
+      message: "Mise à jour des données locales avec le serveur.",
+    );
+
+    try {
       await _syncService.fullSynchronization(_userId ?? "");
 
       await _refreshPendingCount();
       await _loadUserProfile();
-      _showSnackBar("Synchronisation réussie ✅", Colors.green);
+      await _loadLastSyncDate();
+
+      if (mounted) {
+        Navigator.pop(context);
+        _showSnackBar("Synchronisation réussie ✅", Colors.green);
+      }
     } catch (e) {
-      _showSnackBar("Échec : $e", Colors.redAccent);
+      if (mounted) {
+        Navigator.pop(context);
+        _showSnackBar("Échec de la synchronisation : $e", Colors.redAccent);
+      }
     }
   }
 
@@ -192,17 +243,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextFormField(controller: newPassController, obscureText: true, keyboardType: TextInputType.number, maxLength: 4, decoration: const InputDecoration(labelText: "Nouveau code")),
-              TextFormField(controller: confirmPassController, obscureText: true, keyboardType: TextInputType.number, maxLength: 4, decoration: const InputDecoration(labelText: "Confirmer")),
+              TextFormField(
+                  controller: newPassController,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 4,
+                  decoration: const InputDecoration(labelText: "Nouveau code")),
+              TextFormField(
+                  controller: confirmPassController,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 4,
+                  decoration: const InputDecoration(labelText: "Confirmer")),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Annuler")),
           ElevatedButton(
             onPressed: () async {
               if (formKey.currentState!.validate()) {
-                await _dbHelper.updateCustomerCodePinOffline(_userId!, newPassController.text);
+                await _dbHelper.updateCustomerCodePinOffline(
+                    _userId!, newPassController.text);
                 if (mounted) {
                   Navigator.pop(context);
                   _logout();
@@ -217,28 +281,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showSnackBar(String message, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
   }
 
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-   // await prefs.clear();
     if (mounted) {
-      Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const LoginScreen()), (route) => false);
+      Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+              (route) => false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isInitialSyncing) return const Scaffold(body: Center(child: CircularProgressIndicator(color: Color(0xFFFF9800))));
+    if (_isInitialSyncing) {
+      return const Scaffold(
+          body: Center(
+              child: CircularProgressIndicator(color: Color(0xFFFF9800))));
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      appBar: AppBar(title: const Text("TABLEAU DE BORD", style: TextStyle(fontWeight: FontWeight.w900)), backgroundColor: Colors.white, foregroundColor: Colors.black, elevation: 0, actions: [IconButton(icon: const Icon(Icons.logout), onPressed: _logout)]),
+      appBar: AppBar(
+        title: const Text("TABLEAU DE BORD",
+            style: TextStyle(fontWeight: FontWeight.w900)),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
+        actions: [
+          IconButton(icon: const Icon(Icons.logout), onPressed: _logout)
+        ],
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
-          child: Column(children: [_buildHeader(), const SizedBox(height: 30), _buildMenuGrid()]),
+          child: Column(
+              children: [_buildHeader(), const SizedBox(height: 30), _buildMenuGrid()]),
         ),
       ),
     );
@@ -248,11 +328,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(color: const Color(0xFFFF9800), borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFF9800),
+          borderRadius: BorderRadius.circular(20)),
       child: Row(children: [
-        const CircleAvatar(radius: 30, backgroundColor: Colors.white24, child: Icon(Icons.person, size: 40, color: Colors.white)),
+        const CircleAvatar(
+            radius: 30,
+            backgroundColor: Colors.white24,
+            child: Icon(Icons.person, size: 40, color: Colors.white)),
         const SizedBox(width: 15),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text("Bonjour, ${_userName ?? 'Utilisateur'}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)), Text("Profil : ${_userProfile ?? 'Non défini'}", style: const TextStyle(color: Colors.white70))])),
+        Expanded(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("Bonjour, ${_userName ?? 'Utilisateur'}",
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold)),
+                  Text("Profil : ${_userProfile ?? 'Non défini'}",
+                      style: const TextStyle(color: Colors.white70))
+                ])),
       ]),
     );
   }
@@ -260,9 +354,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _buildMenuGrid() {
     return Column(children: [
       Row(children: [
-        Expanded(child: _buildMenuCard("Commencer", "Mes structures", Icons.storefront_rounded, Colors.orange, () => Navigator.push(context, MaterialPageRoute(builder: (_) => const StructuresScreen())).then((_) => _refreshPendingCount()))),
+        Expanded(
+            child: _buildMenuCard(
+                "Commencer",
+                "Mes structures",
+                Icons.storefront_rounded,
+                Colors.orange,
+                    () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const StructuresScreen()))
+                    .then((_) => _refreshPendingCount()))),
         const SizedBox(width: 15),
-        Expanded(child: _buildMenuCard("Sécurité", "Code PIN", Icons.lock_outline, Colors.purple, _showChangePasswordDialog)),
+        Expanded(
+            child: _buildMenuCard("Sécurité", "Code PIN", Icons.lock_outline,
+                Colors.purple, _showChangePasswordDialog)),
       ]),
       const SizedBox(height: 15),
       Row(children: [
@@ -274,18 +380,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     : "Dernière : $_lastSyncDateLabel",
                 Icons.sync,
                 Colors.blue,
-                _handleManualSync
-            )
-        ),
+                _handleManualSync)),
         const SizedBox(width: 15),
         const Expanded(child: SizedBox.shrink()),
       ]),
     ]);
   }
 
-  Widget _buildMenuCard(String title, String subtitle, IconData icon, Color color, VoidCallback onTap) {
+  Widget _buildMenuCard(
+      String title, String subtitle, IconData icon, Color color, VoidCallback onTap) {
     return Container(
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: color.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))]),
+      decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+                color: color.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 4))
+          ]),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -293,12 +406,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           borderRadius: BorderRadius.circular(20),
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: color, size: 24)),
-              const SizedBox(height: 15),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-              Text(subtitle, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
-            ]),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                          color: color.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Icon(icon, color: color, size: 24)),
+                  const SizedBox(height: 15),
+                  Text(title,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w800, fontSize: 16)),
+                  Text(subtitle,
+                      style: TextStyle(
+                          color: Colors.grey.shade600, fontSize: 12)),
+                ]),
           ),
         ),
       ),
