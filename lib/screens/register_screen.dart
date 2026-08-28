@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:math';
-import 'package:fada/utils/app_exception.dart';
+import 'package:pokiboo/utils/app_exception.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';

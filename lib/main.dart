@@ -1,5 +1,5 @@
-import 'package:fada/screens/structures_screen.dart';
-import 'package:fada/screens/welcome_screen.dart'; // ✅ Import du nouvel écran de bienvenue
+import 'package:pokiboo/screens/structures_screen.dart';
+import 'package:pokiboo/screens/welcome_screen.dart'; // ✅ Import du nouvel écran de bienvenue
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/cart_provider.dart';

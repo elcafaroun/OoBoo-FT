@@ -1,6 +1,6 @@
-import 'package:fada/providers/cart_provider.dart';
-import 'package:fada/services/sync_service.dart';
-import 'package:fada/widgets/product_image_widget.dart';
+import 'package:pokiboo/providers/cart_provider.dart';
+import 'package:pokiboo/services/sync_service.dart';
+import 'package:pokiboo/widgets/product_image_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';

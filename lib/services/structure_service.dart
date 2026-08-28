@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:fada/models/subscription_plan.dart';
-import 'package:fada/services/database/database_helper.dart';
-import 'package:fada/services/subscription_service.dart';
-import 'package:fada/utils/constants.dart';
+import 'package:pokiboo/models/subscription_plan.dart';
+import 'package:pokiboo/services/database/database_helper.dart';
+import 'package:pokiboo/services/subscription_service.dart';
+import 'package:pokiboo/utils/constants.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';

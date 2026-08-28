@@ -1,6 +1,6 @@
 import 'dart:io';
-import 'package:fada/screens/home_screen.dart';
-import 'package:fada/services/network_checker.dart';
+import 'package:pokiboo/screens/home_screen.dart';
+import 'package:pokiboo/services/network_checker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';

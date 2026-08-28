@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:fada/screens/login_screen.dart';
-import 'package:fada/screens/register_screen.dart';
+import 'package:pokiboo/screens/login_screen.dart';
+import 'package:pokiboo/screens/register_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class WelcomeScreen extends StatelessWidget {

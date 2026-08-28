@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:fada/services/database/database_helper.dart';
-import 'package:fada/utils/constants.dart';
+import 'package:pokiboo/services/database/database_helper.dart';
+import 'package:pokiboo/utils/constants.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
 import 'network_checker.dart';

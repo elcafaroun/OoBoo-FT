@@ -1,0 +1,10 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- ANSE DU SAC -->
+  <path d="M350 260C350 150 410 80 512 80C614 80 674 150 674 260" stroke="#FF9F43" stroke-width="80" stroke-linecap="round"/>
+
+  <!-- CORPS DU SAC (Transparent au centre) -->
+  <circle cx="512" cy="580" r="390" stroke="#FF9F43" stroke-width="80" fill="none"/>
+
+  <!-- ÉCLAIR (Agrandit et centré) -->
+  <path d="M540 370L380 580H580L480 790" stroke="#FF9F43" stroke-width="85" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

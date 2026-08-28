@@ -1,12 +1,12 @@
 import 'dart:io';
 import 'dart:async';
-import 'package:fada/screens/scanner_screen.dart';
+import 'package:pokiboo/screens/scanner_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/product_service.dart';
-import 'package:fada/screens/mon_espace_screen.dart';
+import 'package:pokiboo/screens/mon_espace_screen.dart';
 
 class AddProductScreen extends StatefulWidget {
   final String categoryId;

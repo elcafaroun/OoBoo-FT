@@ -1,11 +1,9 @@
 import 'dart:convert';
-
-
 import 'dart:io';
 
-import 'package:fada/services/customer_service.dart';
-import 'package:fada/services/database/database_helper.dart';
-import 'package:fada/services/network_checker.dart';
+import 'package:pokiboo/services/customer_service.dart';
+import 'package:pokiboo/services/database/database_helper.dart';
+import 'package:pokiboo/services/network_checker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -69,6 +67,7 @@ class _CartScreenState extends State<CartScreen> {
     final commandRequest = CommandRequest(
       id: commandId,
       customerName: name,
+      customerNum: phone, // Numéro transmis pour le backend
       totalAmount: cart.totalAmount,
       paymentMethod: modePaiement,
       codeStructure: _currentStructureId,
@@ -94,6 +93,13 @@ class _CartScreenState extends State<CartScreen> {
       if (context.mounted) {
         Navigator.pop(context); // Fermer le loader
         if (success) {
+
+          // 💥 REMPLACEMENT : Utilisation du module centralisé dans DatabaseHelper
+          // On ne crédite les points immédiatement que si la commande est payée (isPaye == true)
+          if (isPaye) {
+            await DatabaseHelper().addLoyaltyPointsOffline(phone, cart.totalAmount);
+          }
+
           cart.clearCart();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -337,10 +343,14 @@ class _CustomerDialogState extends State<CustomerDialog> {
 
     String customerId;
     int currentVersion = 1;
+    String currentSegment = 'STANDARD';
+    int currentPoints = 0;
 
     if (existing.isNotEmpty) {
       customerId = existing.first['id'] as String;
       currentVersion = ((existing.first['version'] as int?) ?? 0) + 1;
+      currentSegment = (existing.first['segment'] as String?) ?? 'STANDARD';
+      currentPoints = (existing.first['nombreDePoints'] as int?) ?? 0;
     } else {
       customerId = "CUST-${DateTime.now().millisecondsSinceEpoch}";
     }
@@ -349,19 +359,21 @@ class _CustomerDialogState extends State<CustomerDialog> {
       'id': customerId,
       'numCust': phone,
       'codePin': null,
-      'customerName': name, // Le nom saisi dans le champ
+      'customerName': name,
       'codeStructure': codeStructure,
+      'segment': currentSegment,
+      'nombreDePoints': currentPoints,
       'createdDate': existing.isNotEmpty
           ? (existing.first['createdDate'] ?? DateTime.now().toIso8601String())
           : DateTime.now().toIso8601String(),
       'version': currentVersion,
-      'isSynced': 0, // Défini à 0 jusqu'à confirmation de synchro serveur
+      'isSynced': 0,
     };
 
-    // 💥 ETAPE CLEF : Sauvegarder d'abord IMMÉDIATEMENT en local dans SQLite !
+    // 1. Sauvegarde locale immédiate
     await _dbHelper.saveCustomerLocal(customerPayload);
 
-    // Tentative d'envoi API
+    // 2. Traitement d'envoi API / File de synchro
     try {
       bool isOnline = await NetworkChecker.isBackendAccessible();
       if (isOnline) {
@@ -370,15 +382,13 @@ class _CustomerDialogState extends State<CustomerDialog> {
         } else {
           await customerService.createCustomer(customerPayload);
         }
-        // Marquer comme synchronisé en local si l'API répond avec succès
         await db.update('customers', {'isSynced': 1}, where: 'id = ?', whereArgs: [customerId]);
-        debugPrint("✅ Client $name ($phone) envoyé au serveur et synchronisé localement.");
+        debugPrint("✅ Client $name ($phone) mis à jour/créé et synchronisé.");
       } else {
-        // Hors-ligne : ajouter dans la file sync_queue
         await _addToSyncQueue(db, customerId, customerPayload, existing.isNotEmpty);
       }
     } catch (e) {
-      debugPrint("⚠️ Erreur lors de l'envoi API du client : $e");
+      debugPrint("⚠️ API indisponible. Mise en file d'attente locale : $e");
       await _addToSyncQueue(db, customerId, customerPayload, existing.isNotEmpty);
     }
   }

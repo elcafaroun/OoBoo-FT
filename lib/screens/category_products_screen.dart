@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:fada/screens/scanner_screen.dart';
+import 'package:pokiboo/screens/scanner_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/product_service.dart';

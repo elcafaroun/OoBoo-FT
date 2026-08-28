@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/subscription_service.dart';
 import '../models/subscription_plan.dart';
 import 'add_structure_screen.dart';
+import 'login_screen.dart'; // 👈 Import de votre écran de connexion
 
 class SubscriptionScreen extends StatefulWidget {
   final String? structureId;
@@ -42,7 +43,14 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
         centerTitle: true,
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            // 💥 REDIRECTION VERS LOGIN_SCREEN (en vidant l'historique de navigation)
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => const LoginScreen()),
+                  (route) => false,
+            );
+          },
         ),
       ),
       body: FutureBuilder<List<SubscriptionPlan>>(

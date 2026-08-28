@@ -1,14 +1,14 @@
 import 'dart:convert';
-import 'package:fada/services/database/database_helper.dart';
-import 'package:fada/utils/app_exception.dart';
+import 'package:pokiboo/services/database/database_helper.dart';
+import 'package:pokiboo/utils/app_exception.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:fada/services/user_service.dart';
-import 'package:fada/services/structure_service.dart';
-import 'package:fada/services/network_checker.dart';
-import 'package:fada/screens/register_screen.dart';
-import 'package:fada/screens/subscription_screen.dart';
+import 'package:pokiboo/services/user_service.dart';
+import 'package:pokiboo/services/structure_service.dart';
+import 'package:pokiboo/services/network_checker.dart';
+import 'package:pokiboo/screens/register_screen.dart';
+import 'package:pokiboo/screens/subscription_screen.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {

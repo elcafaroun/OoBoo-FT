@@ -1,5 +1,5 @@
 import 'package:bcrypt/bcrypt.dart';
-import 'package:fada/providers/file_storage_helper.dart';
+import 'package:pokiboo/providers/file_storage_helper.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'dart:convert';
@@ -10,8 +10,8 @@ class DatabaseHelper {
 
   static Database? _database;
 
-  // Version globale de la base de données
-  static const int _dbVersion = 4;
+  // Version globale de la base de données (Passage en v5 pour intégrer les règles de fidélité et segments)
+  static const int _dbVersion = 5;
 
   factory DatabaseHelper() => _instance;
 
@@ -81,6 +81,32 @@ class DatabaseHelper {
       debugPrint(" [DB MIGRATION] Exécution des scripts pour v4...");
       await db.execute('CREATE INDEX IF NOT EXISTS idx_cmd_date ON commands (orderDate)');
       await db.execute('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue (status)');
+    }
+
+    // Migration de v4 vers v5 (Support Fidélité & Segments)
+    if (oldVersion < 5) {
+      debugPrint(" [DB MIGRATION] Exécution des scripts pour v5 (Ajout segment et nombreDePoints)...");
+      try {
+        await db.execute("ALTER TABLE customers ADD COLUMN segment TEXT DEFAULT 'STANDARD'");
+      } catch (e) {
+        debugPrint(" [DB MIGRATION WARNING] segment existe déjà : $e");
+      }
+      try {
+        await db.execute("ALTER TABLE customers ADD COLUMN nombreDePoints INTEGER DEFAULT 0");
+      } catch (e) {
+        debugPrint(" [DB MIGRATION WARNING] nombreDePoints existe déjà : $e");
+      }
+
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS segment_rules (
+          id TEXT PRIMARY KEY,
+          segmentName TEXT UNIQUE NOT NULL,
+          conversionRate REAL DEFAULT 1000.0,
+          pointsEarned INTEGER DEFAULT 1,
+          minAmountOrder REAL DEFAULT 0.0,
+          codeStructure TEXT
+        )
+      ''');
     }
   }
 
@@ -179,9 +205,22 @@ class DatabaseHelper {
         codePin TEXT, 
         customerName TEXT, 
         codeStructure TEXT,
+        segment TEXT DEFAULT 'STANDARD',
+        nombreDePoints INTEGER DEFAULT 0,
         createdDate TEXT, 
         version INTEGER,
         isSynced INTEGER DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE segment_rules (
+        id TEXT PRIMARY KEY,
+        segmentName TEXT UNIQUE NOT NULL,
+        conversionRate REAL DEFAULT 1000.0,
+        pointsEarned INTEGER DEFAULT 1,
+        minAmountOrder REAL DEFAULT 0.0,
+        codeStructure TEXT
       )
     ''');
 
@@ -616,7 +655,7 @@ class DatabaseHelper {
     await db.delete('sync_queue', where: 'id = ?', whereArgs: [id]);
   }
 
-  // --- 5. CUSTOMERS ---
+  // --- 5. CUSTOMERS & FIDÉLITÉ ---
   Future<void> saveCustomerLocal(Map<String, dynamic> customer) async {
     final db = await database;
     await db.insert(
@@ -627,8 +666,11 @@ class DatabaseHelper {
           'codePin': customer['codePin'],
           'customerName': customer['customerName'],
           'codeStructure': customer['codeStructure'],
+          'segment': customer['segment'] ?? 'STANDARD',
+          'nombreDePoints': customer['nombreDePoints'] ?? 0,
           'createdDate': customer['createdDate'] ?? DateTime.now().toIso8601String(),
           'version': customer['version'] ?? 0,
+          'isSynced': customer['isSynced'] ?? 0,
         },
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
@@ -847,6 +889,8 @@ class DatabaseHelper {
           'codePin': cust['codePin'],
           'customerName': cust['customerName'],
           'codeStructure': cust['codeStructure'],
+          'segment': cust['segment'] ?? 'STANDARD',
+          'nombreDePoints': cust['nombreDePoints'] ?? 0,
           'createdDate': cust['createdDate'] ?? DateTime.now().toIso8601String(),
           'version': cust['version'] ?? 0,
           'isSynced': 1,
@@ -857,6 +901,79 @@ class DatabaseHelper {
 
     await batch.commit(noResult: true);
     debugPrint(" [DB] ${customers.length} clients synchronisés.");
+  }
+
+  // --- GESTION DES RÈGLES DE SEGMENTATION ---
+
+  Future<void> syncSegmentRulesLocal(List<dynamic> rules) async {
+    if (rules.isEmpty) return;
+    final db = await database;
+    Batch batch = db.batch();
+
+    for (var rule in rules) {
+      batch.insert(
+        'segment_rules',
+        {
+          'id': rule['id'],
+          'segmentName': rule['segmentName'],
+          'conversionRate': (rule['conversionRate'] as num?)?.toDouble() ?? 1000.0,
+          'pointsEarned': rule['pointsEarned'] ?? 1,
+          'minAmountOrder': (rule['minAmountOrder'] as num?)?.toDouble() ?? 0.0,
+          'codeStructure': rule['codeStructure'],
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+
+    await batch.commit(noResult: true);
+    debugPrint(" [DB] ${rules.length} règles de segmentation synchronisées.");
+  }
+
+  // --- CALCUL DES POINTS FIDÉLITÉ (HORS-LIGNE) ---
+
+  Future<void> addLoyaltyPointsOffline(String phone, double amountPaid) async {
+    if (amountPaid <= 0 || phone.isEmpty) return;
+    final db = await database;
+
+    final customer = await getCustomerByNumCustLocal(phone);
+    if (customer == null) return;
+
+    final String segment = customer['segment'] ?? 'STANDARD';
+    final int currentPoints = (customer['nombreDePoints'] as int?) ?? 0;
+
+    final List<Map<String, dynamic>> rules = await db.query(
+      'segment_rules',
+      where: 'segmentName = ?',
+      whereArgs: [segment],
+      limit: 1,
+    );
+
+    double conversionRate = 1000.0;
+    int pointsEarned = 1;
+    double minAmount = 0.0;
+
+    if (rules.isNotEmpty) {
+      conversionRate = (rules.first['conversionRate'] as num?)?.toDouble() ?? 1000.0;
+      pointsEarned = (rules.first['pointsEarned'] as int?) ?? 1;
+      minAmount = (rules.first['minAmountOrder'] as num?)?.toDouble() ?? 0.0;
+    }
+
+    if (amountPaid >= minAmount && conversionRate > 0) {
+      int earned = (amountPaid / conversionRate).floor() * pointsEarned;
+      if (earned > 0) {
+        int newTotalPoints = currentPoints + earned;
+        await db.update(
+          'customers',
+          {
+            'nombreDePoints': newTotalPoints,
+            'isSynced': 0,
+          },
+          where: 'id = ?',
+          whereArgs: [customer['id']],
+        );
+        debugPrint(" [FIDÉLITÉ] $earned points ajoutés au client $phone (Nouveau total: $newTotalPoints)");
+      }
+    }
   }
 
   // --- APP SETTINGS ---

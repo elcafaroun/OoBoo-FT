@@ -3,8 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:fada/services/cat_service.dart';
-import 'package:fada/screens/mon_espace_screen.dart';
+import 'package:pokiboo/services/cat_service.dart';
+import 'package:pokiboo/screens/mon_espace_screen.dart';
 
 class AddCategoryScreen extends StatefulWidget {
   final String structureId;

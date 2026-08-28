@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
-import 'package:fada/services/database/database_helper.dart';
-import 'package:fada/services/sync_service.dart';
+import 'package:pokiboo/services/database/database_helper.dart';
+import 'package:pokiboo/services/sync_service.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';

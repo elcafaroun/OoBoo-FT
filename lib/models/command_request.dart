@@ -3,6 +3,7 @@ import 'command_item_request.dart';
 class CommandRequest {
   final String id;
   final String customerName;
+  final String? customerNum;
   final double totalAmount;
   final String paymentMethod;
   final String codeStructure;
@@ -14,6 +15,7 @@ class CommandRequest {
   CommandRequest({
     required this.id,
     required this.customerName,
+    required this.customerNum,
     required this.totalAmount,
     required this.paymentMethod,
     required this.codeStructure,
@@ -28,6 +30,7 @@ class CommandRequest {
     return {
       'id': id,
       'customerName': customerName,
+      'customerNum': customerNum,
       'totalAmount': totalAmount,
       'paymentMethod': paymentMethod,
       'codeStructure': codeStructure,
@@ -43,6 +46,7 @@ class CommandRequest {
     return CommandRequest(
       id: json['id'] as String,
       customerName: json['customerName'] as String? ?? '',
+      customerNum: json['customerNum'],
       totalAmount: (json['totalAmount'] as num?)?.toDouble() ?? 0.0,
       paymentMethod: json['paymentMethod'] as String? ?? 'CASH',
       codeStructure: json['codeStructure'] as String? ?? '',

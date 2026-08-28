@@ -1,5 +1,5 @@
-import 'package:fada/screens/home_screen.dart';
-import 'package:fada/screens/subscription_screen.dart';
+import 'package:pokiboo/screens/home_screen.dart';
+import 'package:pokiboo/screens/subscription_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/structure_service.dart';
