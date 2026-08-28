@@ -281,6 +281,16 @@ class DatabaseHelper {
     return maps.isNotEmpty ? maps.first : null;
   }
 
+  Future<bool> verifyCustomerCodePinOffline(String userId, String oldPin) async {
+    final db = await database;
+    final res = await db.query(
+      'users',
+      where: 'id = ? AND userPassword = ?', // 👈 'userPassword' utilisé ici
+      whereArgs: [userId, oldPin],
+    );
+    return res.isNotEmpty;
+  }
+
   // --- 2. SYNCHRONISATION ---
   Future<void> syncStructuresLocal(List<dynamic> structures) async {
     if (structures.isEmpty) return;
@@ -695,22 +705,29 @@ class DatabaseHelper {
   Future<void> updateCustomerCodePinOffline(String userId, String newCode) async {
     final db = await database;
 
-    await db.update('users',
-        {'codeUser': newCode, 'updatedAt': DateTime.now().toIso8601String()},
-        where: 'id = ?', whereArgs: [userId]);
+    // 1. Mise à jour du PIN local dans la table 'users'
+    await db.update(
+      'users',
+      {
+        'userPassword': newCode, // 👈 Remplace 'codeUser' par 'userPassword'
+        'updatedAt': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [userId],
+    );
 
+    // 2. Ajout de l'événement dans la file d'attente de synchronisation
     await db.insert('sync_queue', {
       'action': 'UPDATE_PASSWORD',
       'tableName': 'users',
       'entityId': userId,
       'data': jsonEncode({'newPassword': newCode}),
       'timestamp': DateTime.now().millisecondsSinceEpoch.toString(),
-      'status': 'PENDING'
+      'status': 'PENDING',
     });
 
-    debugPrint(" [DB Helper] Changement PIN enregistré dans la queue avec 'newPassword'.");
+    debugPrint("🟢 [DB Helper] Changement PIN local enregistré et mis dans sync_queue.");
   }
-
   int _parseBool(dynamic value) {
     if (value == null) return 0;
     if (value is bool) return value ? 1 : 0;

@@ -131,7 +131,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               }
             });
           } else {
-            debugPrint(" Initialisation déjà effectuée précédemment.");
+            debugPrint("Initialisation déjà effectuée précédemment.");
             await _loadLastSyncDate();
             await _refreshPendingCount();
           }
@@ -227,56 +227,168 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Modification du mot de passe / Code PIN avec vérification ancien PIN, maj en ligne, sync et déconnexion
+  /// Modification du mot de passe / Code PIN avec validation API, sync et déconnexion
   void _showChangePasswordDialog() {
     final formKey = GlobalKey<FormState>();
+    final oldPassController = TextEditingController();
     final newPassController = TextEditingController();
     final confirmPassController = TextEditingController();
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: const Text("Sécurité PIN"),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                  controller: newPassController,
-                  obscureText: true,
-                  keyboardType: TextInputType.number,
-                  maxLength: 4,
-                  decoration: const InputDecoration(labelText: "Nouveau code")),
-              TextFormField(
-                  controller: confirmPassController,
-                  obscureText: true,
-                  keyboardType: TextInputType.number,
-                  maxLength: 4,
-                  decoration: const InputDecoration(labelText: "Confirmer")),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Annuler")),
-          ElevatedButton(
-            onPressed: () async {
-              if (formKey.currentState!.validate()) {
-                await _dbHelper.updateCustomerCodePinOffline(
-                    _userId!, newPassController.text);
-                if (mounted) {
-                  Navigator.pop(context);
-                  _logout();
-                }
-              }
-            },
-            child: const Text("ENREGISTRER"),
-          )
-        ],
-      ),
+      builder: (context) {
+        bool isLoading = false;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              title: const Text("Sécurité PIN"),
+              content: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: oldPassController,
+                        obscureText: true,
+                        keyboardType: TextInputType.number,
+                        maxLength: 4,
+                        decoration: const InputDecoration(labelText: "Ancien code PIN"),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return "Veuillez entrer l'ancien code";
+                          }
+                          if (value.length < 4) {
+                            return "Le code doit contenir 4 chiffres";
+                          }
+                          return null;
+                        },
+                      ),
+                      TextFormField(
+                        controller: newPassController,
+                        obscureText: true,
+                        keyboardType: TextInputType.number,
+                        maxLength: 4,
+                        decoration: const InputDecoration(labelText: "Nouveau code PIN"),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return "Veuillez entrer le nouveau code";
+                          }
+                          if (value.length < 4) {
+                            return "Le code doit contenir 4 chiffres";
+                          }
+                          if (value == oldPassController.text) {
+                            return "Le nouveau code doit être différent";
+                          }
+                          return null;
+                        },
+                      ),
+                      TextFormField(
+                        controller: confirmPassController,
+                        obscureText: true,
+                        keyboardType: TextInputType.number,
+                        maxLength: 4,
+                        decoration: const InputDecoration(labelText: "Confirmer le code"),
+                        validator: (value) {
+                          if (value != newPassController.text) {
+                            return "Les codes ne correspondent pas";
+                          }
+                          return null;
+                        },
+                      ),
+                      if (isLoading)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 15),
+                          child: CircularProgressIndicator(color: Color(0xFFFF9800)),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: isLoading
+                  ? []
+                  : [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Annuler"),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (!formKey.currentState!.validate()) return;
+
+                    setDialogState(() => isLoading = true);
+
+                    try {
+                      // 1. Vérification de la connectivité réseau
+                      bool isOnline = await NetworkChecker.isBackendAccessible();
+                      if (!isOnline) {
+                        setDialogState(() => isLoading = false);
+                        _showSnackBar(
+                          "Connexion Internet requise pour changer le PIN",
+                          Colors.redAccent,
+                        );
+                        return;
+                      }
+
+                      // 2. Mise à jour distante via l'API
+                      // Le serveur vérifie l'ancien mot de passe avec BCryptPasswordEncoder
+                      bool onlineUpdated = await _syncService.updatePasswordOnline(
+                        userId: _userId!,
+                        oldPassword: oldPassController.text,
+                        newPassword: newPassController.text,
+                      );
+
+                      if (!onlineUpdated) {
+                        setDialogState(() => isLoading = false);
+                        _showSnackBar(
+                          "Échec de la mise à jour sur le serveur ❌",
+                          Colors.redAccent,
+                        );
+                        return;
+                      }
+
+                      // 3. Mise à jour de la base de données locale SQLite
+                      await _dbHelper.updateCustomerCodePinOffline(
+                        _userId!,
+                        newPassController.text,
+                      );
+
+                      // 4. Synchronisation complète des données (Full Sync)
+                      await _syncService.fullSynchronization(_userId!);
+
+                      if (mounted) {
+                        Navigator.pop(context); // Fermer la modale
+                        _showSnackBar(
+                          "PIN mis à jour avec succès. Veuillez vous re-connecter ✅",
+                          Colors.green,
+                        );
+
+                        // 5. Déconnexion automatique et retour à l'écran de login
+                        await _logout();
+                      }
+                    } catch (e) {
+                      setDialogState(() => isLoading = false);
+
+                      // Gestion propre de l'erreur d'ancien mot de passe incorrect retournée par l'API
+                      String errorMessage = "L'ancien code PIN est incorrect ❌";
+                      if (!e.toString().contains("HTTP_")) {
+                        errorMessage = "Erreur : $e";
+                      }
+
+                      _showSnackBar(errorMessage, Colors.redAccent);
+                    }
+                  },
+                  child: const Text("ENREGISTRER"),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

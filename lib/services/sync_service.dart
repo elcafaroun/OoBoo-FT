@@ -323,4 +323,31 @@ class SyncService {
       debugPrint("⚠️ [SyncService] Notification sync échouée : $e");
     }
   }
+
+
+  Future<bool> updatePasswordOnline({
+    required String userId,
+    required String oldPassword,
+    required String newPassword,
+  }) async {
+    try {
+      final response = await http.patch(
+        Uri.parse('$baseUrl/user/reset-password/$userId'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'oldPassword': oldPassword,
+          'newPassword': newPassword,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        return true;
+      }
+
+      throw Exception("HTTP_${response.statusCode}|Échec de la réinitialisation du mot de passe.");
+    } catch (e) {
+      debugPrint("Erreur réinitialisation mot de passe : $e");
+      rethrow;
+    }
+  }
 }
