@@ -30,7 +30,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool obscurePassword = true;
   bool obscureConfirm = true;
 
-  // 🌐 États pour le contrôle de l'accès à l'API/Backend au démarrage
   bool _isCheckingConnectivity = true;
   bool _isOnline = false;
 
@@ -55,12 +54,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  /// 🔒 Appel du NetworkChecker avant d'afficher le formulaire
   Future<void> _checkInitialConnectivity() async {
     if (!mounted) return;
-    setState(() {
-      _isCheckingConnectivity = true;
-    });
+    setState(() => _isCheckingConnectivity = true);
 
     final bool backendAccessible = await NetworkChecker.isBackendAccessible();
 
@@ -77,7 +73,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return pin.toString();
   }
 
-  /// 🚨 Modale d'avertissement explicite en cas de limite de quota atteinte
   void _showQuotaLimitDialog(AppException exception) {
     showDialog(
       context: context,
@@ -144,44 +139,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
           actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           actions: [
-            // 🔘 FERMER
             TextButton(
               onPressed: () {
                 Navigator.pop(dialogContext);
-                if (mounted) {
-                  Navigator.pop(context);
-                }
+                if (mounted) Navigator.pop(context);
               },
               child: const Text(
                 "Fermer",
-                style: TextStyle(
-                  color: Color(0xFF64748B),
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.bold),
               ),
             ),
-
-            // 🚀 CHANGER DE PLAN : Redirection vers les Abonnements
             ElevatedButton(
               onPressed: () {
                 Navigator.pop(dialogContext);
-                if (mounted) {
-                  Navigator.pushNamed(context, '/subscription');
-                }
+                if (mounted) Navigator.pushNamed(context, '/subscription');
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.orange,
                 elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
               child: const Text(
                 "Changer de plan",
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
             ),
           ],
@@ -190,14 +170,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  /// 📝 Envoi du Code PIN d'accès (WhatsApp ou SMS)
-  Future<void> _sendAccessCode(String method, String phone, String userName, String pin) async {
-    final cleanPhone = phone.replaceAll(' ', '');
-    final message = "Bonjour $userName, voici vos accès à l'application POKIBOO.\n\n"
+  String _buildMessageContent(String userName, String pin) {
+    return "Bonjour $userName, voici vos accès à l'application POKIBOO.\n\n"
         "Profil : $userProfile\n"
         "Identifiant (Email) : ${emailController.text.trim()}\n"
         "Votre Code PIN secret : *$pin*\n\n"
         "Veuillez modifier votre code dès votre première connexion.";
+  }
+
+  Future<void> _sendAccessCode(String method, String phone, String userName, String pin) async {
+    final cleanPhone = phone.replaceAll(' ', '');
+    final message = _buildMessageContent(userName, pin);
 
     Uri url;
     if (method == 'whatsapp') {
@@ -213,23 +196,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
 
     try {
-      if (await launchUrl(url, mode: LaunchMode.externalApplication)) {
-        // Succès
-      } else {
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
         throw 'Impossible d\'ouvrir l\'application de messagerie.';
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text("Impossible d'ouvrir l'application sélectionnée ❌ ($e)"),
-          backgroundColor: Colors.red,
-        ));
+        _showSnackBar("Impossible d'ouvrir l'application sélectionnée ❌ ($e)", Colors.red);
       }
     }
   }
 
-  /// 💬 Modale de sélection du canal d'envoi (WhatsApp / SMS)
+  /// 💬 Modale avec option de copie et choix WhatsApp / SMS
   void _showShareOptions(String phone, String userName, String pin) {
+    final messageText = _buildMessageContent(userName, pin);
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -243,31 +223,55 @@ class _RegisterScreenState extends State<RegisterScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                "Envoyer les accès au collaborateur",
+                "Collaborateur créé avec succès !",
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
               ),
               const SizedBox(height: 5),
               Text(
-                "Le code PIN généré est le $pin. Choisissez un canal d'envoi :",
-                style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
+                "Code PIN généré : $pin",
+                style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 13),
               ),
-              const SizedBox(height: 20),
-              ListTile(
-                leading: const Icon(Icons.message, color: Colors.blue, size: 24),
-                title: const Text("Envoyer par SMS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                onTap: () async {
-                  Navigator.pop(bottomSheetContext);
-                  await _sendAccessCode('sms', phone, userName, pin);
-                  if (mounted) Navigator.pop(context);
+              const SizedBox(height: 15),
+
+              // 📋 Bouton Copier le message
+              OutlinedButton.icon(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: messageText));
+                  if (mounted) {
+                    Navigator.pop(bottomSheetContext);
+                    Navigator.pop(context);
+                    _showSnackBar("Message copié dans le presse-papier ! 📋", Colors.green);
+                  }
                 },
+                icon: const Icon(Icons.copy_rounded, size: 18, color: Color(0xFF1E293B)),
+                label: const Text("Copier le message d'accès", style: TextStyle(color: Color(0xFF1E293B), fontWeight: FontWeight.bold)),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 44),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  side: BorderSide(color: Colors.grey.shade300),
+                ),
               ),
+              const SizedBox(height: 10),
               const Divider(),
+
               ListTile(
                 leading: const Icon(Icons.phone_android, color: Colors.green, size: 24),
-                title: const Text("Envoyer par WhatsApp", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                title: const Text("Envoyer via WhatsApp", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: const Text("Ouvre WhatsApp avec le message pré-rempli", style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
                 onTap: () async {
                   Navigator.pop(bottomSheetContext);
                   await _sendAccessCode('whatsapp', phone, userName, pin);
+                  if (mounted) Navigator.pop(context);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.message, color: Colors.blue, size: 24),
+                title: const Text("Envoyer par SMS", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                subtitle: const Text("Futur canal automatisé / application SMS", style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+                onTap: () async {
+                  Navigator.pop(bottomSheetContext);
+                  // TODO: Implémenter ton futur service SMS ici
+                  await _sendAccessCode('sms', phone, userName, pin);
                   if (mounted) Navigator.pop(context);
                 },
               ),
@@ -417,7 +421,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    "L'application n'arrive pas à joindre les services de synchronisation réseau. L'enregistrement de nouveaux comptes est désactivé en mode hors-ligne pour préserver la cohérence des structures.",
+                    "L'application n'arrive pas à joindre les services de synchronisation réseau. L'enregistrement de nouveaux comptes est désactivé en mode hors-ligne.",
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: Color(0xFF64748B), height: 1.5),
                   ),
@@ -479,7 +483,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // 🏢 Badge SaaS Header
                     Center(
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -513,18 +516,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       ),
                     ),
-
                     const SizedBox(height: 18),
                     const Divider(color: Color(0xFFF1F5F9), thickness: 1),
                     const SizedBox(height: 16),
-
-                    // 📝 Champs du Formulaire
                     _buildTextField(nameController, 'Nom complet', Icons.person_outline_rounded, TextInputType.name),
                     const SizedBox(height: 12),
                     _buildTextField(phoneController, 'Téléphone', Icons.phone_outlined, TextInputType.phone),
                     const SizedBox(height: 12),
                     _buildTextField(emailController, 'Adresse Email (Optionnel)', Icons.email_outlined, TextInputType.emailAddress),
-
                     if (widget.isFromLogin) ...[
                       const SizedBox(height: 12),
                       _buildPasswordField(passwordController, 'Code PIN (4 chiffres)', obscurePassword, () => setState(() => obscurePassword = !obscurePassword)),
@@ -545,7 +544,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             SizedBox(width: 10),
                             Expanded(
                               child: Text(
-                                "Le code PIN sera généré automatiquement et pourra être envoyé par WhatsApp ou SMS.",
+                                "Le code PIN sera généré automatiquement et pourra être copié ou partagé via WhatsApp/SMS.",
                                 style: TextStyle(color: Color(0xFF475569), fontSize: 11, fontWeight: FontWeight.w500, height: 1.3),
                               ),
                             ),
@@ -553,9 +552,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       ),
                     ],
-
                     const SizedBox(height: 16),
-
                     if (!widget.isFromLogin) ...[
                       const Text("Type de profil d'accès :", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1E293B))),
                       const SizedBox(height: 8),
@@ -596,10 +593,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       ),
                     ],
-
                     const SizedBox(height: 24),
-
-                    // 🔘 Bouton Soumission
                     SizedBox(
                       width: double.infinity,
                       height: 46,

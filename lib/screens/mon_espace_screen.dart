@@ -1221,7 +1221,8 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                               ? int.tryParse(rawPriority.toString())
                               : null;
 
-                          await Navigator.push<SubscriptionPlan>(
+                          // 1. Ouvrir l'écran de sélection de plan et récupérer le plan choisi
+                          final SubscriptionPlan? selectedPlan = await Navigator.push<SubscriptionPlan>(
                             context,
                             MaterialPageRoute(
                               builder: (_) => SubscriptionScreen(
@@ -1231,7 +1232,44 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
                             ),
                           );
 
-                          // 🚀 Synchro post-abonnement / renouvellement
+                          // 2. Si un plan a été sélectionné, on déclenche la mise à jour sur le serveur
+                          if (selectedPlan != null && mounted) {
+                            showDialog(
+                              context: context,
+                              barrierDismissible: false,
+                              builder: (_) => const Center(
+                                child: CircularProgressIndicator(color: Color(0xFFFF9800)),
+                              ),
+                            );
+
+                            try {
+                              // ✅ Appel de la méthode existante dans StructureService
+                              await _structureService.updateStructurePlan(id, selectedPlan);
+
+                              if (mounted) Navigator.pop(context); // Fermer le loader
+
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text("Abonnement renouvelé avec succès !"),
+                                    backgroundColor: Colors.green,
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                Navigator.pop(context); // Fermer le loader en cas d'erreur
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text("Erreur lors du renouvellement : $e"),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              }
+                            }
+                          }
+
+                          // 3. Lancer la synchronisation globale et rafraîchir la liste
                           await _triggerFullSync();
                           _checkNetworkAndLoad();
                         },

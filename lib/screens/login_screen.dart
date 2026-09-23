@@ -30,6 +30,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final StructureService _structureService = StructureService();
 
   // ✅ OFFLINE-FIRST : Navigation rapide basée sur l'état local ou en ligne
+// ✅ OFFLINE-FIRST : Navigation rapide basée sur l'état local ou en ligne
   Future<void> _checkAndNavigate(String userId, String codeStructure, bool isOnlineTarget) async {
     try {
       List<dynamic> structures;
@@ -42,18 +43,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
-      // Extraction de l'ID de structure si disponible
-      final String structureId = (structures.isNotEmpty && structures.first['id'] != null)
-          ? structures.first['id'].toString()
-          : codeStructure;
-
       if (structures.isEmpty && codeStructure.isEmpty) {
+        // ✅ Correction : On passe structureId à null pour forcer le choix d'un plan
+        // en vue de créer une nouvelle structure et non de renouveler.
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) => SubscriptionScreen(
-              structureId: structureId,
-
+            builder: (context) => const SubscriptionScreen(
+              structureId: null,
             ),
           ),
         );
@@ -73,6 +70,8 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+
+
   // ✅ LE CŒUR DU OFFLINE-FIRST SÉCURISÉ
 
   void _login() async {
@@ -83,6 +82,11 @@ class _LoginScreenState extends State<LoginScreen> {
     final String passwordValue = _passwordController.text.trim();
 
     try {
+      // 1. VÉRIFICATION DE LA DISPONIBILITÉ DU RÉSEAU
+      bool isOnline = await NetworkChecker.isBackendAccessible();
+
+      // Si l'utilisateur n'existe pas encore en local OU qu'on a du réseau,
+      // on force le passage par le serveur (essentiel pour la reconnexion après changement de PIN).
       final db = await DatabaseHelper().database;
       final List<Map<String, dynamic>> localUserExists = await db.query(
         'users',
@@ -91,6 +95,64 @@ class _LoginScreenState extends State<LoginScreen> {
         limit: 1,
       );
 
+      // Si on a du réseau, on tente TOUJOURS d'authentifier en ligne en premier
+      // (ce qui permet de valider le nouveau mot de passe modifié juste avant).
+      if (isOnline) {
+        try {
+          final userData = await _userService.login(loginValue, passwordValue);
+
+          final String serverCodeUser = (userData['codeUser'] ?? '').toString();
+          final bool isFirstLogin = userData['isFirstLogin'] == true;
+
+          final SharedPreferences prefs = await SharedPreferences.getInstance();
+          final String userId = userData['id'].toString();
+
+          List<dynamic> structuresAssociees = userData['structures'] ?? [];
+          String codeStructure = structuresAssociees.isNotEmpty
+              ? structuresAssociees.first['codeStructure']?.toString() ?? ''
+              : '';
+
+          String profileValue = userData['userProfile']?.toString() ?? 'SUPER_ADMIN';
+
+          Map<String, dynamic> localUserMap = {
+            'id': userId,
+            'userName': userData['userName'] ?? loginValue,
+            'userEmail': userData['userEmail'],
+            'userPhone': userData['userPhone'],
+            'userProfile': profileValue,
+            'codeStructure': codeStructure,
+            'codeUser': serverCodeUser.isNotEmpty ? serverCodeUser : passwordValue,
+            'isActive': 1,
+            'updatedAt': DateTime.now().toIso8601String(),
+          };
+
+          if (mounted) {
+            setState(() => _isLoading = false);
+            if (isFirstLogin) {
+              // Si c'est la toute première connexion, on affiche la modale (toujours rien en local)
+              _showChangePasswordDialog(userId, codeStructure, localUserMap);
+            } else {
+              // ✅ C'EST LA RECONNEXION POST-MODIFICATION (ou connexion normale en ligne) :
+              // Le serveur a validé -> ON MET A JOUR LA BASE LOCALE MAINTENANT
+              await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
+              await _saveSession(prefs, userData, codeStructure);
+
+              _showSnackBar('Connexion réussie 🚀', Colors.green);
+              _checkAndNavigate(userId, codeStructure, true);
+            }
+          }
+          return;
+        } catch (apiError) {
+          // Si l'appel en ligne échoue (ex: mauvais nouveau mot de passe tapé ou erreur serveur)
+          // Si l'utilisateur existait déjà en local et qu'on est hors ligne ou que l'API refuse, on gère l'erreur.
+          if (localUserExists.isEmpty) {
+            throw apiError; // Laisse remonter l'erreur de l'API si l'utilisateur n'a pas de compte local
+          }
+        }
+      }
+
+      // 2. SI PAS DE RÉSEAU (OU HORS LIGNE) : On fouille uniquement dans la base locale
+      // (pour les connexions habituelles des jours suivants)
       if (localUserExists.isNotEmpty) {
         final localUser = await DatabaseHelper().checkLoginOffline(loginValue, passwordValue);
 
@@ -102,7 +164,7 @@ class _LoginScreenState extends State<LoginScreen> {
           await _saveSession(prefs, Map<String, dynamic>.from(localUser), cachedCodeStructure);
 
           if (mounted) {
-            _showSnackBar('Connexion réussie ', Colors.blueGrey);
+            _showSnackBar('Connexion réussie (Mode Local) 📴', Colors.blueGrey);
             setState(() => _isLoading = false);
           }
 
@@ -112,53 +174,10 @@ class _LoginScreenState extends State<LoginScreen> {
         } else {
           throw Exception("INVALID_CREDENTIALS|Identifiant ou code PIN local incorrect.");
         }
-      }
-
-      if (await NetworkChecker.isBackendAccessible()) {
-        final userData = await _userService.login(loginValue, passwordValue);
-
-        final String serverCodeUser = (userData['codeUser'] ?? '').toString();
-        if (serverCodeUser.isNotEmpty && serverCodeUser != passwordValue && userData['isFirstLogin'] != true) {
-          throw Exception("INVALID_CREDENTIALS|Identifiant ou code PIN invalide.");
-        }
-
-        final SharedPreferences prefs = await SharedPreferences.getInstance();
-        final String userId = userData['id'].toString();
-
-        List<dynamic> structuresAssociees = userData['structures'] ?? [];
-        String codeStructure = structuresAssociees.isNotEmpty
-            ? structuresAssociees.first['codeStructure']?.toString() ?? ''
-            : '';
-
-        String profileValue = userData['userProfile']?.toString() ?? 'SUPER_ADMIN';
-
-        Map<String, dynamic> localUserMap = {
-          'id': userId,
-          'userName': userData['userName'] ?? loginValue,
-          'userEmail': userData['userEmail'],
-          'userPhone': userData['userPhone'],
-          'userProfile': profileValue,
-          'codeStructure': codeStructure,
-          'codeUser': serverCodeUser.isNotEmpty ? serverCodeUser : passwordValue,
-          'isActive': 1,
-          'updatedAt': DateTime.now().toIso8601String(),
-        };
-
-        await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
-        final bool isFirstLogin = userData['isFirstLogin'] == true;
-        await _saveSession(prefs, userData, codeStructure);
-
-        if (mounted) {
-          setState(() => _isLoading = false);
-          if (isFirstLogin) {
-            _showChangePasswordDialog(userId, codeStructure, localUserMap);
-          } else {
-            _checkAndNavigate(userId, codeStructure, true);
-          }
-        }
       } else {
-        throw Exception("OFFLINE_LOGIN_FAILED|Première connexion requise en ligne.");
+        throw Exception("OFFLINE_LOGIN_FAILED|Connexion Internet requise pour cette première authentification.");
       }
+
     } catch (e) {
       setState(() => _isLoading = false);
       final appErr = AppException.fromRaw(e);
@@ -216,7 +235,7 @@ class _LoginScreenState extends State<LoginScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
+      builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
@@ -272,17 +291,21 @@ class _LoginScreenState extends State<LoginScreen> {
                       setDialogState(() => _isDialogLoading = true);
 
                       String dynamicNewPin = _newPinController.text.trim();
+
+                      // 1. Appel au serveur pour changer le mot de passe
                       bool updateSuccess = await _userService.changeFirstPassword(userId, dynamicNewPin);
                       setDialogState(() => _isDialogLoading = false);
 
                       if (updateSuccess) {
-                        localUserMap['codeUser'] = dynamicNewPin;
-                        await DatabaseHelper().saveOrUpdateUserLocal(localUserMap);
-
                         if (context.mounted) {
-                          Navigator.pop(context);
-                          _showSnackBar('Code PIN mis à jour avec succès ! 🎉', Colors.green);
-                          _checkAndNavigate(userId, codeStructure, true);
+                          Navigator.pop(dialogContext); // Fermeture propre de la modale
+
+                          // 2. On nettoie les champs du formulaire de login
+                          _passwordController.clear();
+
+                          // 3. ON NE SAUVEGARDE RIEN EN LOCAL ICI (Respect du choix utilisateur)
+
+                          _showSnackBar('Code PIN mis à jour avec succès ! Veuillez vous reconnecter. 🎉', Colors.green);
                         }
                       } else {
                         _showSnackBar('Erreur lors de la mise à jour ❌', Colors.red);

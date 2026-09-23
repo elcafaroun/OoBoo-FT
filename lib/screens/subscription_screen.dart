@@ -68,7 +68,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
           if (widget.filterPriorite != null) {
             plans = plans.where((plan) {
               int planPriority = plan.priorite ?? 0;
-              return planPriority <= widget.filterPriorite!;
+              return planPriority >= widget.filterPriorite!;
             }).toList();
           }
           plans.sort((a, b) => (a.priorite ?? 0).compareTo(b.priorite ?? 0));
@@ -116,8 +116,8 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                       if (widget.structureId != null || widget.filterPriorite != null) {
                         Navigator.pop(context, plan);
                       } else {
-                        Navigator.pop(context);
-                        Navigator.push(
+                        // Utiliser pushReplacement pour remplacer l'écran de souscription par AddStructureScreen
+                        Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
                             builder: (context) => AddStructureScreen(plan: plan.name),
