@@ -266,6 +266,7 @@ class SyncService {
     }
   }
 
+
   Future<bool> _sendCustomerToServer(Map<String, dynamic> data, {bool isUpdate = false}) async {
     try {
       final url = isUpdate ? "$_customerUrl/update" : _customerUrl;
@@ -292,6 +293,7 @@ class SyncService {
       return false;
     }
   }
+
 
   Future<bool> _sendCancelToServer(String orderId) async {
     try {
@@ -323,7 +325,6 @@ class SyncService {
       debugPrint("⚠️ [SyncService] Notification sync échouée : $e");
     }
   }
-
 
   Future<bool> updatePasswordOnline({
     required String userId,

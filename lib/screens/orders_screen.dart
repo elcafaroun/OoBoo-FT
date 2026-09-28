@@ -11,7 +11,10 @@ import '../services/command_service.dart';
 import '../services/database/database_helper.dart';
 
 class OrdersScreen extends StatefulWidget {
-  const OrdersScreen({super.key});
+  final String? structureName; // Nom de la boutique optionnel reçu en paramètre
+
+  const OrdersScreen({super.key, this.structureName});
+
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
 }
@@ -53,7 +56,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       return;
     }
 
-    // 1. CHARGEMENT LOCAL IMMEDIAT (Source de vérité)
+    // 1. CHARGEMENT LOCAL IMMÉDIAT (Source de vérité)
     final localData = await _dbHelper.getLocalCommands(structureId);
     if (mounted) {
       setState(() {
@@ -89,6 +92,8 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final orderId = order['id']?.toString() ?? "N/A";
     final List<dynamic> items = order['items'] ?? [];
 
+    final String shopName = widget.structureName ?? "POKIBOO";
+
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a6,
@@ -96,24 +101,37 @@ class _OrdersScreenState extends State<OrdersScreen> {
           return pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              pw.Center(child: pw.Text("REÇU DE PAIEMENT", style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold))),
+              pw.Center(
+                child: pw.Text(
+                  shopName.toUpperCase(),
+                  style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
+                ),
+              ),
+              pw.SizedBox(height: 4), // 👈 Retrait de "const" ici
+              pw.Center(child: pw.Text("REÇU DE PAIEMENT", style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.normal))),
               pw.Divider(),
               pw.Text("Client : ${order['customerName'] ?? 'Inconnu'}"),
               pw.Text("Date : ${DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now())}"),
               pw.Text("Mode : $method"),
               pw.Divider(),
-              ...items.map((item) => pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text("${item['productName'] ?? 'Produit'} (x${item['quantity'] ?? 1})"),
-                  pw.Text("${(item['unitPrice'] ?? 0 * (item['quantity'] ?? 1)).toStringAsFixed(0)} FCFA"),
-                ],
-              )),
+              ...items.map((item) {
+                final double unitPrice = (item['unitPrice'] is num) ? item['unitPrice'].toDouble() : double.tryParse(item['unitPrice']?.toString() ?? '0') ?? 0.0;
+                final int quantity = (item['quantity'] is num) ? item['quantity'].toInt() : int.tryParse(item['quantity']?.toString() ?? '1') ?? 1;
+                final double lineTotal = unitPrice * quantity;
+
+                return pw.Row(
+                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                  children: [
+                    pw.Text("${item['productName'] ?? 'Produit'} (x$quantity)"),
+                    pw.Text("${lineTotal.toStringAsFixed(0)} FCFA"),
+                  ],
+                );
+              }),
               pw.Divider(),
               pw.Text("Total réglé : ${amount.toStringAsFixed(0)} FCFA", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-              pw.SizedBox(height: 10),
+              pw.SizedBox(height: 10), // 👈 S'assurer qu'il n'y a pas de "const" non plus ici
               pw.Center(child: pw.BarcodeWidget(barcode: pw.Barcode.qrCode(), data: orderId, width: 60, height: 60)),
-              pw.Text("Merci pour votre confiance", style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+              pw.Center(child: pw.Text("Merci pour votre confiance", style: pw.TextStyle(fontWeight: pw.FontWeight.bold))),
             ],
           );
         },

@@ -272,7 +272,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> with WidgetsBinding
                       () async {
                     await Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const OrdersScreen()),
+                      MaterialPageRoute(
+                        builder: (_) => OrdersScreen(structureName: widget.structureName), // 👈 Ajout du paramètre ici
+                      ),
                     );
                     await _refreshOrdersOnly();
                   },
