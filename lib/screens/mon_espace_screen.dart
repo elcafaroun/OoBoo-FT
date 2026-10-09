@@ -972,6 +972,7 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
           ),
         ],
       ),
+
       floatingActionButton: FloatingActionButton.extended(
         onPressed: !isBackendAccessible
             ? null
@@ -980,23 +981,23 @@ class _MonEspaceScreenState extends State<MonEspaceScreen> {
             context,
             MaterialPageRoute(
               builder: (context) => const SubscriptionScreen(
-                structureId: '',
+                // 💡 CORRECTION : On ne passe plus structureId: ''
+                // Il sera 'null' par défaut, ce qui déclenchera correctement le choix d'un plan pour une nouvelle structure.
               ),
             ),
           );
 
-          // 🚀 Lancement de la synchronisation globale après ajout de structure
+          // Lancement de la synchronisation globale après retour
           await _triggerFullSync();
-
           _checkNetworkAndLoad();
         },
         backgroundColor:
         !isBackendAccessible ? Colors.grey : const Color(0xFFFF9800),
         icon: const Icon(Icons.add, color: Colors.white),
         label: const Text("Ajouter une structure",
-            style:
-            TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
       ),
+
       body: isLoading
           ? const Center(
           child: CircularProgressIndicator(color: Color(0xFFFF9800)))
